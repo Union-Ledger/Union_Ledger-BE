@@ -1,0 +1,28 @@
+services:
+  api:
+    build:
+      context: .
+    command: uvicorn union_ledger.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: union_ledger
+      POSTGRES_USER: union_ledger
+      POSTGRES_PASSWORD: union_ledger
+    ports:
+      - "5432:5432"
+    volumes:
+      - union_ledger_postgres:/var/lib/postgresql/data
+
+volumes:
+  union_ledger_postgres:
+
