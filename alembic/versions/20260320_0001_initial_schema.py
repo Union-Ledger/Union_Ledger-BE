@@ -13,19 +13,28 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-role_type = postgresql.ENUM("student", "treasurer", "auditor", "admin", name="role_type")
+role_type = postgresql.ENUM(
+    "student",
+    "treasurer",
+    "auditor",
+    "admin",
+    name="role_type",
+    create_type=False,
+)
 invited_role_type = postgresql.ENUM(
     "student",
     "treasurer",
     "auditor",
     "admin",
     name="invited_role_type",
+    create_type=False,
 )
 invitation_type = postgresql.ENUM(
     "treasurer_invite",
     "auditor_invite",
     "role_transfer",
     name="invitation_type",
+    create_type=False,
 )
 invitation_status = postgresql.ENUM(
     "pending",
@@ -33,6 +42,7 @@ invitation_status = postgresql.ENUM(
     "expired",
     "revoked",
     name="invitation_status",
+    create_type=False,
 )
 settlement_status = postgresql.ENUM(
     "draft",
@@ -43,12 +53,14 @@ settlement_status = postgresql.ENUM(
     "rejected",
     "resubmitted",
     name="settlement_status",
+    create_type=False,
 )
 evidence_type = postgresql.ENUM(
     "physical_receipt",
     "bank_transfer_statement",
     "e_receipt",
     name="evidence_type",
+    create_type=False,
 )
 evidence_status = postgresql.ENUM(
     "uploaded",
@@ -57,14 +69,21 @@ evidence_status = postgresql.ENUM(
     "confirmed",
     "failed",
     name="evidence_status",
+    create_type=False,
 )
-extraction_method = postgresql.ENUM("ocr", "pdf_text", name="extraction_method")
+extraction_method = postgresql.ENUM(
+    "ocr",
+    "pdf_text",
+    name="extraction_method",
+    create_type=False,
+)
 payment_method = postgresql.ENUM(
     "card",
     "bank_transfer",
     "online_payment",
     "other",
     name="payment_method",
+    create_type=False,
 )
 bank_statement_status = postgresql.ENUM(
     "uploaded",
@@ -72,6 +91,7 @@ bank_statement_status = postgresql.ENUM(
     "completed",
     "failed",
     name="bank_statement_status",
+    create_type=False,
 )
 match_status = postgresql.ENUM(
     "matched",
@@ -81,11 +101,13 @@ match_status = postgresql.ENUM(
     "missing_evidence",
     "manually_resolved",
     name="match_status",
+    create_type=False,
 )
 artifact_type = postgresql.ENUM(
     "settlement_excel",
     "evidence_pdf",
     name="artifact_type",
+    create_type=False,
 )
 artifact_status = postgresql.ENUM(
     "queued",
@@ -93,6 +115,7 @@ artifact_status = postgresql.ENUM(
     "completed",
     "failed",
     name="artifact_status",
+    create_type=False,
 )
 notification_type = postgresql.ENUM(
     "settlement_submitted",
@@ -101,6 +124,7 @@ notification_type = postgresql.ENUM(
     "settlement_resubmitted",
     "settlement_published",
     name="notification_type",
+    create_type=False,
 )
 
 
