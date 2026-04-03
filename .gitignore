@@ -16,4 +16,13 @@ dist/
 build/
 *.egg-info/
 uploads/
-
+storage/tessdata/
+samples/receipts/**/*.png
+samples/receipts/**/*.jpg
+samples/receipts/**/*.jpeg
+samples/receipts/**/*.webp
+samples/receipts/**/*.tif
+samples/receipts/**/*.tiff
+samples/receipts/**/*.pdf
+samples/receipts/**/*.csv
+samples/receipts/reports/**/*.json

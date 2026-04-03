@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     )
     storage_root: Path = Path("storage")
     tesseract_cmd: str = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    tessdata_dir: Path = Path("storage/tessdata")
     ocr_languages: str = "kor+eng"
     allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://localhost:5173"]
@@ -41,6 +42,15 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return Path(value)
         return Path("storage")
+
+    @field_validator("tessdata_dir", mode="before")
+    @classmethod
+    def parse_tessdata_dir(cls, value: object) -> Path:
+        if isinstance(value, Path):
+            return value
+        if isinstance(value, str):
+            return Path(value)
+        return Path("storage/tessdata")
 
     model_config = SettingsConfigDict(
         env_file=".env",
