@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OCR Debug Bundle</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 28px;
+      font-family: "Pretendard", "Noto Sans KR", sans-serif;
+      background: #f6f1e8;
+      color: #1f1b17;
+    }
+    .page { max-width: 1400px; margin: 0 auto; }
+    .hero {
+      background: #fffaf1;
+      border: 1px solid #e4d4ba;
+      border-radius: 24px;
+      padding: 24px;
+      box-shadow: 0 14px 30px rgba(58, 38, 18, 0.08);
+    }
+    .hero h1 { margin: 0 0 10px; font-size: 34px; }
+    .hero p { margin: 0; line-height: 1.6; color: #6d6258; }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+    .summary-card {
+      background: #fff;
+      border: 1px solid #eadcc4;
+      border-radius: 16px;
+      padding: 14px;
+    }
+    .summary-card span {
+      display: block;
+      font-size: 12px;
+      color: #7a6f64;
+      margin-bottom: 6px;
+    }
+    .summary-card strong { font-size: 24px; line-height: 1.3; }
+    h2 { margin: 28px 0 12px; font-size: 22px; }
+    .variants {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+    }
+    .variant-card,
+    .attempt-card {
+      background: #fff;
+      border: 1px solid #eadcc4;
+      border-radius: 18px;
+      padding: 14px;
+      box-shadow: 0 10px 24px rgba(58, 38, 18, 0.05);
+    }
+    .variant-card h3 { margin: 0 0 12px; font-size: 16px; }
+    .variant-card img {
+      width: 100%;
+      border-radius: 12px;
+      background: #faf6ef;
+      max-height: 360px;
+      object-fit: contain;
+    }
+    .attempts { display: grid; gap: 14px; }
+    .attempt-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 15px;
+      margin-bottom: 12px;
+    }
+    .fields-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .field {
+      background: #fffaf1;
+      border: 1px solid #f0e4cf;
+      border-radius: 12px;
+      padding: 10px;
+    }
+    .field span {
+      display: block;
+      font-size: 11px;
+      color: #7a6f64;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+    .field strong { font-size: 14px; line-height: 1.4; }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #fbf7ef;
+      border: 1px solid #f0e4cf;
+      border-radius: 12px;
+      padding: 12px;
+      font-family: "D2Coding", "Consolas", monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      max-height: 280px;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <h1>OCR Debug Bundle</h1>
+      <p>
+        명세서 v4 기준 전처리 variant별 OCR 시도를 한 화면에 정리한 디버그 페이지입니다.
+        어떤 variant가 상호명, 날짜, 금액에 더 유리한지 눈으로 비교할 수 있습니다.
+      </p>
+      <div class="summary"><div class="summary-card"><span>전처리 이미지 수</span><strong>5</strong></div><div class="summary-card"><span>총 OCR 시도 수</span><strong>5</strong></div><div class="summary-card"><span>최종 선택 variant</span><strong>adaptive_binary</strong></div><div class="summary-card"><span>최종 선택 avg_conf</span><strong>0.9457</strong></div><div class="summary-card"><span>최종 날짜</span><strong>2026-04-03</strong></div><div class="summary-card"><span>최종 상호명</span><strong>건국대 학생회관 1847카페</strong></div><div class="summary-card"><span>최종 금액</span><strong>4000</strong></div><div class="summary-card"><span>최종 결제수단</span><strong>card</strong></div></div>
+    </section>
+
+    <h2>전처리 이미지</h2>
+    <section class="variants"><div class="variant-card"><h3>source</h3><img src="source.jpg" alt="source" /></div><div class="variant-card"><h3>original</h3><img src="original.png" alt="original" /></div><div class="variant-card"><h3>perspective_corrected</h3><img src="perspective_corrected.png" alt="perspective_corrected" /></div><div class="variant-card"><h3>background_cropped</h3><img src="background_cropped.png" alt="background_cropped" /></div><div class="variant-card"><h3>document_enhanced</h3><img src="document_enhanced.png" alt="document_enhanced" /></div><div class="variant-card"><h3>adaptive_binary</h3><img src="adaptive_binary.png" alt="adaptive_binary" /></div></section>
+
+    <h2>OCR 시도 결과</h2>
+    <section class="attempts">
+    <article class="attempt-card">
+      <div class="attempt-head">
+        <div><strong>#1 adaptive_binary</strong></div>
+        <div>score 128.3855 · avg_conf 0.9457</div>
+      </div>
+      <div class="fields-grid"><div class="field"><span>Date</span><strong>2026-04-03</strong></div><div class="field"><span>Merchant</span><strong>[염수0]건국대 학생회관1841카페</strong></div><div class="field"><span>Amount</span><strong>4000</strong></div><div class="field"><span>Payment</span><strong>card</strong></div></div>
+      <pre>/
+[염수0]건국대 학생회관1841카페
+3148628853/장입수/1577-9083
+서를 광진구 능동듯 120 막성회판1판1술
+[주문번호: 237]
+영수증# 20260403-10041
+포스 1 : 11
+테이 : TAKE OUT
+KIOSK
+품명
+단가수량
+금액
+아메리카노
+2,000
+1
+2,000
+{ICE-&gt;&gt;[1])
+아메리카노
+2,000
+1
+2,000
+(ICE-&gt;&gt;[1])
+(연하게-&gt;&gt;[1])
+주문합계
+공급가
+뿌가세
+4,000
+3,636
+364
+합계
+금액:
+4,000
+**[신용카드결제]**
+카드사명:카카오뱅크
+카드번호:536510
+일시불/IC
+승인번호: 28269942
+승인금액:4,000
+발 행 일 시: 2028-04-03 오전10:29:17
+감사합니다.
+고객용</pre>
+    </article>
+    
+    <article class="attempt-card">
+      <div class="attempt-head">
+        <div><strong>#2 background_cropped</strong></div>
+        <div>score 128.054 · avg_conf 0.9836</div>
+      </div>
+      <div class="fields-grid"><div class="field"><span>Date</span><strong>2026-04-03</strong></div><div class="field"><span>Merchant</span><strong>건국대 학생회관 1847카페</strong></div><div class="field"><span>Amount</span><strong>4000</strong></div><div class="field"><span>Payment</span><strong>card</strong></div></div>
+      <pre>[영수증]
+건국대 학생회관 1847카페
+3148628653/장인수/1577-9063
+서물 광진구 능동로 120 막생외판 1판 1층
+[주문 번호:237]
+영수증#20260403-10041
+포스 ID: 11
+테이블 : TAKE OUT
+KIOSK
+품명
+단가 수량
+금액
+아메리카노
+2,000
+1
+2,000
+(ICE-&gt;&gt;[1])
+아메리카노
+2,000
+1
+2,000
+(ICE-&gt;&gt;[1])
+(연하게-&gt;&gt;[1])
+주문합계
+공급가
+부가세
+4,000
+3,636
+364
+합계 금액:
+4,000
+**[신용카드결제I]**
+카드사명:카카오뱅크
+카드번호:536510
+일시불/IC
+승인번호:28269942
+승인금액:4,000
+발 행 일 시: 2026-04-03 오전 10:29:17
+감사합니다.
+고 객 용</pre>
+    </article>
+    
+    <article class="attempt-card">
+      <div class="attempt-head">
+        <div><strong>#3 original</strong></div>
+        <div>score 125.054 · avg_conf 0.9836</div>
+      </div>
+      <div class="fields-grid"><div class="field"><span>Date</span><strong>2026-04-03</strong></div><div class="field"><span>Merchant</span><strong>건국대 학생회관 1847카페</strong></div><div class="field"><span>Amount</span><strong>4000</strong></div><div class="field"><span>Payment</span><strong>card</strong></div></div>
+      <pre>[영수증]
+건국대 학생회관 1847카페
+3148628653/장인수/1577-9063
+서물 광진구 능동로 120 막생외판 1판 1층
+[주문 번호:237]
+영수증#20260403-10041
+포스 ID: 11
+테이블 : TAKE OUT
+KIOSK
+품명
+단가 수량
+금액
+아메리카노
+2,000
+1
+2,000
+(ICE-&gt;&gt;[1])
+아메리카노
+2,000
+1
+2,000
+(ICE-&gt;&gt;[1])
+(연하게-&gt;&gt;[1])
+주문합계
+공급가
+부가세
+4,000
+3,636
+364
+합계 금액:
+4,000
+**[신용카드결제I]**
+카드사명:카카오뱅크
+카드번호:536510
+일시불/IC
+승인번호:28269942
+승인금액:4,000
+발 행 일 시: 2026-04-03 오전 10:29:17
+감사합니다.
+고 객 용</pre>
+    </article>
+    
+    <article class="attempt-card">
+      <div class="attempt-head">
+        <div><strong>#4 perspective_corrected</strong></div>
+        <div>score 125.054 · avg_conf 0.9836</div>
+      </div>
+      <div class="fields-grid"><div class="field"><span>Date</span><strong>2026-04-03</strong></div><div class="field"><span>Merchant</span><strong>건국대 학생회관 1847카페</strong></div><div class="field"><span>Amount</span><strong>4000</strong></div><div class="field"><span>Payment</span><strong>card</strong></div></div>
+      <pre>[영수증]
+건국대 학생회관 1847카페
+3148628653/장인수/1577-9063
+서물 광진구 능동로 120 막생외판 1판 1층
+[주문 번호:237]
+영수증#20260403-10041
+포스 ID: 11
+테이블 : TAKE OUT
+KIOSK
+품명
+단가 수량
+금액
+아메리카노
+2,000
+1
+2,000
+(ICE-&gt;&gt;[1])
+아메리카노
+2,000
+1
+2,000
+(ICE-&gt;&gt;[1])
+(연하게-&gt;&gt;[1])
+주문합계
+공급가
+부가세
+4,000
+3,636
+364
+합계 금액:
+4,000
+**[신용카드결제I]**
+카드사명:카카오뱅크
+카드번호:536510
+일시불/IC
+승인번호:28269942
+승인금액:4,000
+발 행 일 시: 2026-04-03 오전 10:29:17
+감사합니다.
+고 객 용</pre>
+    </article>
+    
+    <article class="attempt-card">
+      <div class="attempt-head">
+        <div><strong>#5 document_enhanced</strong></div>
+        <div>score 124.7407 · avg_conf 0.9716</div>
+      </div>
+      <div class="fields-grid"><div class="field"><span>Date</span><strong>2026-04-03</strong></div><div class="field"><span>Merchant</span><strong>[염수증]건국대 학생회관1847카페</strong></div><div class="field"><span>Amount</span><strong>4000</strong></div><div class="field"><span>Payment</span><strong>card</strong></div></div>
+      <pre>[염수증]건국대 학생회관1847카페
+3148628653/장인수/1577-9083
+서물 황진구 능동로 120 학생회판1관1슬
+[주문번호: 237]
+영수증# 20260403-10041
+포스 ID : 11
+테이를: TAKE OUT
+KIOSK
+품명
+단가수량
+금액
+아메리카노
+2,000
+1
+2,000
+(ICE-&gt;&gt;[1])
+아메리카노
+2,000
+1
+2,000
+(ICE-&gt;&gt;[1])
+(연하게-&gt;&gt;[1])
+주문합계
+공급가
+부가세
+4,000
+3,636
+364
+합계
+금액:
+4,000
+**[신용카드결제]**
+카드사명:카카오뱅크
+카드번호:536510
+일시불/IC
+승인번호:28269942
+승인금액:4,000
+발 행 일 시: 2028-04-03 오전10:29:17
+감사합니다.
+고객용</pre>
+    </article>
+    </section>
+  </div>
+</body>
+</html>

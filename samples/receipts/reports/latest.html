@@ -1,0 +1,1891 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Receipt OCR Report</title>
+  <style>
+    :root {
+      --bg: #f5efe5;
+      --panel: #fffdf8;
+      --panel-strong: #fff4dc;
+      --line: #e7d8bb;
+      --text: #241d16;
+      --muted: #75675a;
+      --ok: #1f7a48;
+      --fail: #aa3434;
+      --shadow: 0 18px 40px rgba(69, 47, 26, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 28px;
+      font-family: "Pretendard", "Noto Sans KR", sans-serif;
+      background:
+        radial-gradient(circle at top right, rgba(255, 212, 118, 0.24), transparent 25%),
+        linear-gradient(180deg, #fbf8f1 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .page { max-width: 1440px; margin: 0 auto; }
+    .hero {
+      background: linear-gradient(135deg, #fffdf8, #fff2d6);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      padding: 28px 32px;
+      box-shadow: var(--shadow);
+      margin-bottom: 24px;
+    }
+    .hero h1 { margin: 0 0 10px; font-size: 34px; }
+    .hero p { margin: 0; color: var(--muted); line-height: 1.6; }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 14px;
+      margin-top: 20px;
+    }
+    .summary-card {
+      background: rgba(255, 255, 255, 0.82);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+    }
+    .summary-card .label { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+    .summary-card .value { font-size: 28px; font-weight: 800; }
+    .section-title { margin: 24px 0 14px; font-size: 22px; font-weight: 800; }
+    .cards { display: grid; gap: 18px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 20px 22px;
+      background: var(--panel-strong);
+      border-bottom: 1px solid var(--line);
+    }
+    .card-title { margin: 0; font-size: 22px; font-weight: 800; }
+    .card-subtitle { margin-top: 4px; color: var(--muted); font-size: 14px; }
+    .status {
+      padding: 8px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+      height: fit-content;
+    }
+    .status.pass { background: rgba(31, 122, 72, 0.12); color: var(--ok); }
+    .status.fail { background: rgba(170, 52, 52, 0.12); color: var(--fail); }
+    .card-body {
+      display: grid;
+      grid-template-columns: minmax(280px, 380px) 1fr;
+      gap: 18px;
+      padding: 20px 22px 24px;
+    }
+    .image-panel {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+    }
+    .image-panel img {
+      display: block;
+      width: 100%;
+      max-height: 520px;
+      object-fit: contain;
+      border-radius: 12px;
+      background: #faf7f0;
+    }
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .chip {
+      border-radius: 999px;
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      font-size: 12px;
+      background: #fffaf0;
+      color: var(--muted);
+    }
+    .panel-grid { display: grid; gap: 14px; }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      background: #fffefb;
+    }
+    .panel h3 { margin: 0 0 12px; font-size: 16px; }
+    .field-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .field-table th,
+    .field-table td {
+      text-align: left;
+      padding: 10px 8px;
+      border-top: 1px solid #f0e5cf;
+      vertical-align: top;
+      line-height: 1.5;
+      font-size: 14px;
+    }
+    .field-table tr:first-child th,
+    .field-table tr:first-child td { border-top: none; }
+    .field-table th { width: 128px; color: var(--muted); font-weight: 600; }
+    .prediction-ok { color: var(--ok); font-weight: 700; }
+    .prediction-fail { color: var(--fail); font-weight: 700; }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #fbf7ef;
+      border-radius: 14px;
+      border: 1px solid #f0e5cf;
+      padding: 14px;
+      font-family: "D2Coding", "Consolas", monospace;
+      font-size: 13px;
+      line-height: 1.55;
+      max-height: 280px;
+      overflow: auto;
+    }
+    .footer-note { margin-top: 18px; color: var(--muted); font-size: 13px; }
+    @media (max-width: 980px) {
+      body { padding: 16px; }
+      .hero h1 { font-size: 28px; }
+      .card-body { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <h1>Receipt OCR Report</h1>
+      <p>
+        PaddleOCR 기반 OCR 결과를 샘플별로 시각화한 리포트입니다.
+        각 카드에서 원본 이미지, 최종 추출값, 선택된 전처리 variant,
+        필드 병합 결과를 함께 확인할 수 있습니다.
+      </p>
+      <div class="summary-grid"><div class="summary-card"><div class="label">샘플 수</div><div class="value">13</div></div>
+<div class="summary-card"><div class="label">전체 통과율</div><div class="value">38%</div></div>
+<div class="summary-card"><div class="label">날짜 정확도</div><div class="value">85%</div></div>
+<div class="summary-card"><div class="label">상호명 정확도</div><div class="value">69%</div></div>
+<div class="summary-card"><div class="label">금액 정확도</div><div class="value">62%</div></div>
+<div class="summary-card"><div class="label">결제수단 정확도</div><div class="value">100%</div></div></div>
+      <div class="footer-note">Generated at 2026-04-09 15:16:17</div>
+    </section>
+
+    <h2 class="section-title">Sample-by-Sample Results</h2>
+    <section class="cards">
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260403_165959663.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status pass">
+          PASS
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260403_165959663.jpg" alt="KakaoTalk_20260403_165959663.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: adaptive_binary</span>
+            <span class="chip">avg_conf: 0.9457</span>
+            <span class="chip">lines: 41</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-04-03</td><td class="prediction-ok">2026-04-03</td></tr><tr><th>상호명</th><td>건국대 학생회관 1847카페</td><td class="prediction-ok">건국대 학생회관 1847카페</td></tr><tr><th>금액</th><td>4000</td><td class="prediction-ok">4000</td></tr><tr><th>결제수단</th><td>card</td><td class="prediction-ok">card</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>adaptive_binary</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: &quot;2026-04-03&quot;,
+    &quot;merchant&quot;: &quot;건국대 학생회관 1847카페&quot;,
+    &quot;amount&quot;: &quot;4000&quot;,
+    &quot;payment&quot;: &quot;card&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;date&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 137.89,
+      &quot;average_confidence&quot;: 0.9836
+    },
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 143.89,
+      &quot;average_confidence&quot;: 0.9836
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 143.8425,
+      &quot;average_confidence&quot;: 0.9457
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 137.89,
+      &quot;average_confidence&quot;: 0.9836
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: &quot;2026-04-03&quot;,
+  &quot;merchant_name&quot;: &quot;[염수0]건국대 학생회관1841카페&quot;,
+  &quot;amount&quot;: &quot;4000&quot;,
+  &quot;payment_method&quot;: &quot;card&quot;,
+  &quot;confidence&quot;: 1.0
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>/
+[염수0]건국대 학생회관1841카페
+3148628853/장입수/1577-9083
+서를 광진구 능동듯 120 막성회판1판1술
+[주문번호: 237]
+영수증# 20260403-10041
+포스 1 : 11
+테이 : TAKE OUT
+KIOSK
+품명
+단가수량
+금액
+아메리카노
+2,000
+1
+2,000
+{ICE-&gt;&gt;[1])
+아메리카노
+2,000
+1
+2,000
+(ICE-&gt;&gt;[1])
+(연하게-&gt;&gt;[1])
+주문합계
+공급가
+뿌가세
+4,000
+3,636
+364
+합계
+금액:
+4,000
+**[신용카드결제]**
+카드사명:카카오뱅크
+카드번호:536510
+일시불/IC
+승인번호: 28269942
+승인금액:4,000
+발 행 일 시: 2028-04-03 오전10:29:17
+감사합니다.
+고객용</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    
+
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260403_165959663_01.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status pass">
+          PASS
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260403_165959663_01.jpg" alt="KakaoTalk_20260403_165959663_01.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: adaptive_binary</span>
+            <span class="chip">avg_conf: 0.8417</span>
+            <span class="chip">lines: 40</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-04-03</td><td class="prediction-ok">2026-04-03</td></tr><tr><th>상호명</th><td>건국대점(학생식당)</td><td class="prediction-ok">건국대점(학생식당)</td></tr><tr><th>금액</th><td>4900</td><td class="prediction-ok">4900</td></tr><tr><th>결제수단</th><td>card</td><td class="prediction-ok">card</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>adaptive_binary</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: &quot;2026-04-03&quot;,
+    &quot;merchant&quot;: &quot;건국대점(학생식당)&quot;,
+    &quot;amount&quot;: &quot;4900&quot;,
+    &quot;payment&quot;: &quot;card&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;date&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 133.5758,
+      &quot;average_confidence&quot;: 0.8417
+    },
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 133.5758,
+      &quot;average_confidence&quot;: 0.8417
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 139.5758,
+      &quot;average_confidence&quot;: 0.8417
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 133.5758,
+      &quot;average_confidence&quot;: 0.8417
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: &quot;2026-04-03&quot;,
+  &quot;merchant_name&quot;: &quot;건국대점(학생식당)&quot;,
+  &quot;amount&quot;: &quot;4900&quot;,
+  &quot;payment_method&quot;: &quot;card&quot;,
+  &quot;confidence&quot;: 1.0
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>[
+건국대점(학생식당)
+208-809888은:00-0000-0000김원
+서울특별시 광진구 화양동(화양동)83-)
+[판0H]2026/04/03 11:03 [P0S M0: 10-001]
+[
+:
+품목명
+1
+단가
+수량
+할인
+금액
+[가상프린터]
+호출: 173
+잔치국수
+4,900
+0
+4,900
+.÷=
+==
+4,800
+0
+4,455
+445
+4,900
+신용카드매출전표
+ᄂ_ᄂ
+카할카승계
+드부드인제
+번개사번
+1847318
+H율명호왜
+]:일시불
+]:국민카드
+−
+] : 24270098
+4,900
+]:
+@</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    
+
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260403_165959663_02.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status fail">
+          FAIL
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260403_165959663_02.jpg" alt="KakaoTalk_20260403_165959663_02.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: adaptive_binary</span>
+            <span class="chip">avg_conf: 0.8862</span>
+            <span class="chip">lines: 38</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-04-03</td><td class="prediction-fail">2028-04-03</td></tr><tr><th>상호명</th><td>건국대점(학생식당)</td><td class="prediction-ok">건국대점(학생식당)</td></tr><tr><th>금액</th><td>4900</td><td class="prediction-ok">4900</td></tr><tr><th>결제수단</th><td>card</td><td class="prediction-ok">card</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>adaptive_binary</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: &quot;2028-04-03&quot;,
+    &quot;merchant&quot;: &quot;건국대점(학생식당)&quot;,
+    &quot;amount&quot;: &quot;4900&quot;,
+    &quot;payment&quot;: &quot;card&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;date&quot;: {
+      &quot;preprocessing&quot;: &quot;document_enhanced&quot;,
+      &quot;score&quot;: 135.4492,
+      &quot;average_confidence&quot;: 0.9273
+    },
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 141.0225,
+      &quot;average_confidence&quot;: 0.9389
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 141.355,
+      &quot;average_confidence&quot;: 0.8862
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 135.355,
+      &quot;average_confidence&quot;: 0.8862
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: &quot;2028-04-03&quot;,
+  &quot;merchant_name&quot;: &quot;건국대침(화생식당)&quot;,
+  &quot;amount&quot;: &quot;4900&quot;,
+  &quot;payment_method&quot;: &quot;card&quot;,
+  &quot;confidence&quot;: 1.0
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>건국대침(화생식당)
+00-0000-00002원
+200-85-00808 TEL
+서법시 광친구 화양동(회양등)3
+[E0M]2028/04/03 11:04 [P03 M0: 09-00011
+-==
+품목명
+단가
+수량
+합인
+금액
+[가상프린터]
+호출:311
+잔치국수
+4,900
+0
+·4,900
+매
+4,900
+0
+4,455
+445
+4,900
+신용카드 매출전표
+카합카승겸
+드부드인제
+번개사번금
+호월명호액
+-
+]: 536510**********
+-
+임시불
+ᄂ
+]:국민카드
+] : 23270156
+4,900
+1&#x27;2&#x27;026040*3*0*8*80*
+거래번호:0001계산담당자:키오스크</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    
+
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260403_165959663_03.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status fail">
+          FAIL
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260403_165959663_03.jpg" alt="KakaoTalk_20260403_165959663_03.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: background_cropped</span>
+            <span class="chip">avg_conf: 0.9259</span>
+            <span class="chip">lines: 31</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-03-13</td><td class="prediction-ok">2026-03-13</td></tr><tr><th>상호명</th><td>HD현대오일뱅크 (주)창원씨더블유주유</td><td class="prediction-ok">HD현대오일뱅크</td></tr><tr><th>금액</th><td>6000</td><td class="prediction-fail">167</td></tr><tr><th>결제수단</th><td>card</td><td class="prediction-ok">card</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>background_cropped</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: &quot;2026-03-13&quot;,
+    &quot;merchant&quot;: &quot;HD현대오일뱅크&quot;,
+    &quot;amount&quot;: &quot;167&quot;,
+    &quot;payment&quot;: &quot;card&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;date&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 135.8808,
+      &quot;average_confidence&quot;: 0.9259
+    },
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 141.8808,
+      &quot;average_confidence&quot;: 0.9259
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 139.8325,
+      &quot;average_confidence&quot;: 0.8113
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 135.8808,
+      &quot;average_confidence&quot;: 0.9259
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: &quot;2026-03-13&quot;,
+  &quot;merchant_name&quot;: &quot;HD현대오일뱅크&quot;,
+  &quot;amount&quot;: &quot;167&quot;,
+  &quot;payment_method&quot;: &quot;card&quot;,
+  &quot;confidence&quot;: 1.0
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>HD현대오일뱅크
+1
+여신금용협회(02-2011-0700)
+IC신용슬민
+[고 객 용]
+기번호:KHP9***186
+거래번호:0010010050
+:5404-47*****-861*
+명:
+삼성마스타카드
+26/03/1316:22:59
+시
+형태:일시불
+5.455원
+546원
+계:
+6,000원
+승입법홈:85945142
+매입사명:삼성카드사
+정상 완료
+전자매입전표
+간맹점명:(주)창원씨더블유주유Tel:02
+3436 1112
+사업자N0:283-88-02197
+오창원
+가맹점ND: 183950105
+서울 광친구 광나루로 460
+세차서비스
+167KF HD 01.73
+금융결제원(Hel pDesk)1577-5500
+서명 (SIGNATURE)</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    
+
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260403_165959663_04.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status fail">
+          FAIL
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260403_165959663_04.jpg" alt="KakaoTalk_20260403_165959663_04.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: adaptive_binary</span>
+            <span class="chip">avg_conf: 0.9145</span>
+            <span class="chip">lines: 18</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-02-28</td><td class="prediction-ok">2026-02-28</td></tr><tr><th>상호명</th><td>한국도로공사 구리남양영업소</td><td class="prediction-fail">히이패스는</td></tr><tr><th>금액</th><td>1000</td><td class="prediction-fail">2026</td></tr><tr><th>결제수단</th><td>card</td><td class="prediction-ok">card</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>adaptive_binary</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: &quot;2026-02-28&quot;,
+    &quot;merchant&quot;: &quot;히이패스는&quot;,
+    &quot;amount&quot;: &quot;2026&quot;,
+    &quot;payment&quot;: &quot;card&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;date&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 133.3292,
+      &quot;average_confidence&quot;: 0.9145
+    },
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 133.3292,
+      &quot;average_confidence&quot;: 0.9145
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 139.3292,
+      &quot;average_confidence&quot;: 0.9145
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 133.3292,
+      &quot;average_confidence&quot;: 0.9145
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: &quot;2026-02-28&quot;,
+  &quot;merchant_name&quot;: &quot;히이패스는&quot;,
+  &quot;amount&quot;: &quot;2026&quot;,
+  &quot;payment_method&quot;: &quot;card&quot;,
+  &quot;confidence&quot;: 1.0
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>히이패스는
+삐르고
+편리합니다
+영
+수
+중
+한국도로공사
+구리남양영업소(062)
+031-327-2137
+자빈호:129-82-00105
+[2026년
+2월28일18:40
+0
+1.000원 (카트)
+비씨카드(주)
+*
+E412-50**-888*-284C
+3154-2103-0026</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    
+
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260403_165959663_05.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status fail">
+          FAIL
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260403_165959663_05.jpg" alt="KakaoTalk_20260403_165959663_05.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: adaptive_binary</span>
+            <span class="chip">avg_conf: 0.878</span>
+            <span class="chip">lines: 16</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-02-28</td><td class="prediction-fail">-</td></tr><tr><th>상호명</th><td>한국도로공사 구리남양영업소</td><td class="prediction-fail">하이패스는</td></tr><tr><th>금액</th><td>800</td><td class="prediction-ok">800</td></tr><tr><th>결제수단</th><td>card</td><td class="prediction-ok">card</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>adaptive_binary</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: null,
+    &quot;merchant&quot;: &quot;하이패스는&quot;,
+    &quot;amount&quot;: &quot;800&quot;,
+    &quot;payment&quot;: &quot;card&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 120.5692,
+      &quot;average_confidence&quot;: 0.9241
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 120.45,
+      &quot;average_confidence&quot;: 0.878
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 114.5692,
+      &quot;average_confidence&quot;: 0.9241
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: null,
+  &quot;merchant_name&quot;: &quot;하이패스는&quot;,
+  &quot;amount&quot;: &quot;800&quot;,
+  &quot;payment_method&quot;: &quot;card&quot;,
+  &quot;confidence&quot;: 0.75
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>하이패스는
+빠르고편리합니다
+영
+중
+한국도로공사
+꾸리남양영업소(062)
+031-327-2137
+1:J자빈호:129-82-00105
+202:6년
+1 2월28일18:38
+12:
+800원(카드)
+비씨카드(주)
+E412-50**-****-284C
+31154-2103-0865
++</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    
+
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260408_190630511_01.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status pass">
+          PASS
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260408_190630511_01.jpg" alt="KakaoTalk_20260408_190630511_01.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: adaptive_binary</span>
+            <span class="chip">avg_conf: 0.9211</span>
+            <span class="chip">lines: 76</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-04-04</td><td class="prediction-ok">2026-04-04</td></tr><tr><th>상호명</th><td>CU 구의본점</td><td class="prediction-ok">CU구의본점</td></tr><tr><th>금액</th><td>62000</td><td class="prediction-ok">62000</td></tr><tr><th>결제수단</th><td>card</td><td class="prediction-ok">card</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>adaptive_binary</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: &quot;2026-04-04&quot;,
+    &quot;merchant&quot;: &quot;CU구의본점&quot;,
+    &quot;amount&quot;: &quot;62000&quot;,
+    &quot;payment&quot;: &quot;card&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;date&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 141.41,
+      &quot;average_confidence&quot;: 0.9764
+    },
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 147.41,
+      &quot;average_confidence&quot;: 0.9764
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 147.0275,
+      &quot;average_confidence&quot;: 0.9211
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 141.41,
+      &quot;average_confidence&quot;: 0.9764
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: &quot;2026-04-04&quot;,
+  &quot;merchant_name&quot;: &quot;CU구의본점&quot;,
+  &quot;amount&quot;: &quot;62000&quot;,
+  &quot;payment_method&quot;: &quot;card&quot;,
+  &quot;confidence&quot;: 1.0
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>CU Again
+****** 최근영수증발행인쇄***
+CU구의본점
+사업자등목번호:2074102918
+서울특별시 광진구 자양로22길51전
+진마트
+박준영TEL:O
+·정부밤침으로 교환/환볼 시 영수증
+지참하셔야 합니다.(결제카드 지참)
+30일 내 구매 점포 방문
+*식품선도유지상품 및 일부품목제외
+33462 2026-04-04(토) P0S-01
+6
+16,
+카스라이트캔500m1
+2
+--5
+1
+새우활90
+1
+하리보골드바렌100
+2
+1
+진로이즈백병360m1
+&gt;신)주류공병100
+4s
+MDS)라구파스타
+1
+PBICK)콘치즈그라탕
+1
+중
+HK)컨디션헛개병100m]
+1
+HK)컨디션레이디병100
+2
+1
+2,300
+성사이다제로P500
+1
+증정
+빙크레메로나망우유
+1
+1,800
+#빙그레바나나우유
+1
+1, 800
+에씨아이스1m8
+9,000
+2
+좋구매억
+24
+62,000
+56, 273
+과세물품가액
+5,627
+100
+병매출
+62,000
+***
+9
+신용
+62,000
+******
+카드번호: 5327-5010-****-804*
+카드회사:
+HANA
+003
+합부개월:
+00
+승인번호:20506405
+결제금액:
+62,000
+*표시 상품온 부가세 면세 품목 임.
+객층:00 담당:00N0:406215:17
+</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    
+
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260408_190630511.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status pass">
+          PASS
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260408_190630511.jpg" alt="KakaoTalk_20260408_190630511.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: background_cropped</span>
+            <span class="chip">avg_conf: 0.956</span>
+            <span class="chip">lines: 51</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-04-04</td><td class="prediction-ok">2026-04-04</td></tr><tr><th>상호명</th><td>CU 구의본점</td><td class="prediction-ok">CU구의본점</td></tr><tr><th>금액</th><td>2720</td><td class="prediction-ok">2720</td></tr><tr><th>결제수단</th><td>cash</td><td class="prediction-ok">cash</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>background_cropped</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: &quot;2026-04-04&quot;,
+    &quot;merchant&quot;: &quot;CU구의본점&quot;,
+    &quot;amount&quot;: &quot;2720&quot;,
+    &quot;payment&quot;: &quot;cash&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;date&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 139.6667,
+      &quot;average_confidence&quot;: 0.956
+    },
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 145.6667,
+      &quot;average_confidence&quot;: 0.956
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 144.3825,
+      &quot;average_confidence&quot;: 0.9293
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 139.6667,
+      &quot;average_confidence&quot;: 0.956
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: &quot;2026-04-04&quot;,
+  &quot;merchant_name&quot;: &quot;CU구의본점&quot;,
+  &quot;amount&quot;: &quot;2720&quot;,
+  &quot;payment_method&quot;: &quot;cash&quot;,
+  &quot;confidence&quot;: 1.0
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>CU Again
+C
+*******영수증조회발행인쇄 *******
+CU구의본점
+사업자등특번호:2074102918
+*** 최근영수증
+서울특별시 광진구 자양로22길51 전
+진마트
+TFI
+박준영 TEL:0
+정부 방침으로 교환/환블 시 영수증
+지참하셔야 합니다.(결제카드 지참)
+수
+30일 내 구매 점포 방문
+2
+*식품선도유지상품 및 일부품목제외
+33462
+2026-04-04(토) P0S-01
+1
+1,250
+농심)오징어짬뽕소컵
+1,400
+장수)생막걸리750m1
+1
+70
+1
+헤이루)종이컵날개
+3
+2,720
+총 구 매 액
+2,473
+과세물품가액
+247
+부 가 세
+2,720
+5,020
+2,300
+거스름톤
+********
+******** 현금(자진발급)
+확인번호:010-***-1234
+승인번호:482650521
+2,720
+금 액:
+알림:소득공제신청은:(ARS)126
+https://www.hometax.go.kr/
+홈페이지에서 자진발급분 등록을
+해주시기 바랍니다.
+*표시 상품은 부가세 면세 품목 임.
+객층:00
+)담당:00 N0:6092 14:47</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    
+
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260408_190630511_03.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status pass">
+          PASS
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260408_190630511_03.jpg" alt="KakaoTalk_20260408_190630511_03.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: background_cropped</span>
+            <span class="chip">avg_conf: 0.9648</span>
+            <span class="chip">lines: 71</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-04-04</td><td class="prediction-ok">2026-04-04</td></tr><tr><th>상호명</th><td>원플레이 건대점</td><td class="prediction-ok">원플레이 건대점</td></tr><tr><th>금액</th><td>18800</td><td class="prediction-ok">18800</td></tr><tr><th>결제수단</th><td>card</td><td class="prediction-ok">card</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>background_cropped</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: &quot;2026-04-04&quot;,
+    &quot;merchant&quot;: &quot;원플레이 건대점&quot;,
+    &quot;amount&quot;: &quot;18800&quot;,
+    &quot;payment&quot;: &quot;card&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;date&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 140.0033,
+      &quot;average_confidence&quot;: 0.9648
+    },
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 146.0033,
+      &quot;average_confidence&quot;: 0.9648
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 144.0583,
+      &quot;average_confidence&quot;: 0.893
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 140.0033,
+      &quot;average_confidence&quot;: 0.9648
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: &quot;2026-04-04&quot;,
+  &quot;merchant_name&quot;: &quot;원플레이 건대점&quot;,
+  &quot;amount&quot;: &quot;18800&quot;,
+  &quot;payment_method&quot;: &quot;card&quot;,
+  &quot;confidence&quot;: 1.0
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>[카드판맨
+영수증 ]
+[고객용]
+원플레이 건대점
+사업자번호:116-07-98021
+대표자:
+TEL:
+서울특별시 광진구 능동로 119 2층 3층
+테이블명:31
+판매시간:20260404&#x27;23:51:33
+(P0S100)
+판매사원:
+영수번호::121
+금액
+상품
+단가
+수량
+====
+===========================
+1
+6,400
+6,400
+(*)햇살 요금제
+29)
+(2,400)
+L22:22/초과시간
+:(
+1
+3,000
+3,000
+햇살 음료(3000)
+(0)
+1
+-(ICE)아메리카노
+6,400
+6,400
+1
+(*)햇살 요금제
+29)
+(2,400)
+:(
+ᄂ22:21/초과시간
+3,000
+3,000
+1
+햇살 음료 (3000)
+(0)
+1
+-아이스티
+18,800
+계::
+합
+18,800
+카
+드:
+[카드종류] 새마을금고체크 [할부개월] 일시
+불
+97004560********
+번일번
+호]
+[캇
+·
+외시회출
+2026-04-0423:51:32
+75533484
+KSNET
+18,800
+J니
+J매
+--------신용 카드 전표·
+2026040410000121</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    
+
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260408_190630511_04.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status fail">
+          FAIL
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260408_190630511_04.jpg" alt="KakaoTalk_20260408_190630511_04.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: background_cropped</span>
+            <span class="chip">avg_conf: 0.9756</span>
+            <span class="chip">lines: 58</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-04-04</td><td class="prediction-ok">2026-04-04</td></tr><tr><th>상호명</th><td>원플레이 건대점</td><td class="prediction-ok">원플레이 건대점</td></tr><tr><th>금액</th><td>28200</td><td class="prediction-fail">11200</td></tr><tr><th>결제수단</th><td>cash</td><td class="prediction-ok">cash</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>background_cropped</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: &quot;2026-04-04&quot;,
+    &quot;merchant&quot;: &quot;원플레이 건대점&quot;,
+    &quot;amount&quot;: &quot;11200&quot;,
+    &quot;payment&quot;: &quot;cash&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;date&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 139.3233,
+      &quot;average_confidence&quot;: 0.9756
+    },
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 145.3233,
+      &quot;average_confidence&quot;: 0.9756
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 139.3233,
+      &quot;average_confidence&quot;: 0.9756
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 139.3233,
+      &quot;average_confidence&quot;: 0.9756
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: &quot;2026-04-04&quot;,
+  &quot;merchant_name&quot;: &quot;원플레이 건대점&quot;,
+  &quot;amount&quot;: &quot;11200&quot;,
+  &quot;payment_method&quot;: &quot;cash&quot;,
+  &quot;confidence&quot;: 1.0
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>[영 수 증 ]
+원플레이 건대점
+사업자번호:116-07-98021
+TEL:
+대표자:
+서울특별시 광진구 능동로 119 2층 3층
+테이블명: 33
+(P0S100)
+판매시간:20260404&#x27;23:54:53
+영수번호::122
+판매사원:
+====
+==========================
+수량
+금액
+상품
+단가
+=======================================
+11,200
+)1
+11,200
+(*)소나기 요금제
+ᄂ21:21/초과시간:( 33)
+(3,200)
+2,900
+2,900
+소나기 음료 (2900)
+1
+(0)
+-아이스티
+1
+11,200
+1
+11,200
+(*)소나기 요금제
+f:(
+33)
+(3,200)
+ᄂ21:21/초과시간
+2,900
+1
+2,900
+소나기 음료 (2900)
+1
+(0)
+-(ICE)아메리카노
+28,200
+합
+계:
+50,000
+받1
+은금액::
+50,000
+현
+금
+21,800
+거스름돈::
+2026040410000122</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    
+
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260408_190630511_05.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status fail">
+          FAIL
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260408_190630511_05.jpg" alt="KakaoTalk_20260408_190630511_05.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: background_cropped</span>
+            <span class="chip">avg_conf: 0.9109</span>
+            <span class="chip">lines: 32</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-03-25</td><td class="prediction-ok">2026-03-25</td></tr><tr><th>상호명</th><td>한아름볼링프라자</td><td class="prediction-fail">Smartro여신금공회(0221D부지)</td></tr><tr><th>금액</th><td>50400</td><td class="prediction-fail">2819</td></tr><tr><th>결제수단</th><td>card</td><td class="prediction-ok">card</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>background_cropped</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: &quot;2026-03-25&quot;,
+    &quot;merchant&quot;: &quot;Smartro여신금공회(0221D부지)&quot;,
+    &quot;amount&quot;: &quot;2819&quot;,
+    &quot;payment&quot;: &quot;card&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;date&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 134.2558,
+      &quot;average_confidence&quot;: 0.9109
+    },
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 140.2558,
+      &quot;average_confidence&quot;: 0.9109
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 136.6875,
+      &quot;average_confidence&quot;: 0.7655
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 134.2558,
+      &quot;average_confidence&quot;: 0.9109
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: &quot;2026-03-25&quot;,
+  &quot;merchant_name&quot;: &quot;Smartro여신금공회(0221D부지)&quot;,
+  &quot;amount&quot;: &quot;2819&quot;,
+  &quot;payment_method&quot;: &quot;card&quot;,
+  &quot;confidence&quot;: 1.0
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>[고객용]
+Smartro여신금공회(0221D부지)
+신한카드신용매출전표(IC 신용)
+206-26-84817
+한아름볼링프라자
+2186296002
+이석준
+지하
+서울 광진구 능동로 13길 39 한아름건물
+/일련번호:9636
+걸랜입스
+시:26/03/2518:55:54
+일시불
+.
+캇등밥
+4658-87*-**-4138
+가맹점번호:5858228
+21294491
+원원원
+45
+8
+분각센물품간액
+4
+세
+581
+주 가&quot;가치
+합&#x27;계&#x27;금&#x27;
+앞
+501
+400
+마이신한P잔여:2819
+** 재인쇄전표 ***</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    
+
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260408_190630511_06.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status fail">
+          FAIL
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260408_190630511_06.jpg" alt="KakaoTalk_20260408_190630511_06.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: original</span>
+            <span class="chip">avg_conf: 0.9148</span>
+            <span class="chip">lines: 34</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-04-03</td><td class="prediction-ok">2026-04-03</td></tr><tr><th>상호명</th><td>춘리마라탕 송파점</td><td class="prediction-fail">,2층 201호</td></tr><tr><th>금액</th><td>13160</td><td class="prediction-ok">13160</td></tr><tr><th>결제수단</th><td>card</td><td class="prediction-ok">card</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>original</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: &quot;2026-04-03&quot;,
+    &quot;merchant&quot;: &quot;,2층 201호&quot;,
+    &quot;amount&quot;: &quot;13160&quot;,
+    &quot;payment&quot;: &quot;card&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;date&quot;: {
+      &quot;preprocessing&quot;: &quot;original&quot;,
+      &quot;score&quot;: 131.4367,
+      &quot;average_confidence&quot;: 0.9148
+    },
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;original&quot;,
+      &quot;score&quot;: 131.4367,
+      &quot;average_confidence&quot;: 0.9148
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;original&quot;,
+      &quot;score&quot;: 131.4367,
+      &quot;average_confidence&quot;: 0.9148
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;original&quot;,
+      &quot;score&quot;: 131.4367,
+      &quot;average_confidence&quot;: 0.9148
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: &quot;2026-04-03&quot;,
+  &quot;merchant_name&quot;: &quot;,2층 201호&quot;,
+  &quot;amount&quot;: &quot;13160&quot;,
+  &quot;payment_method&quot;: &quot;card&quot;,
+  &quot;confidence&quot;: 1.0
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>주문번호: 0053(매장)
+테이블번호:1
+저K
+포 명:춘리마라탕 송파점
+,2층 201호
+사업자 번호:564-15-01865
+대표 자 명:오증군
+전화번호:-
+=
+==
+카카승할
+드드인부
+종번번기
+:94909434******
+:일시불
+[신용카드승인]
+품 명
+수량
+금액
+마라탕
+1
+12,160
+(매운맛)2단계
+0
+무제한 음료바
+1
+1,000
+총
+액:
+13,160원
+결 제 일 시:2026-04-0320:08:50
+====
+========
+&lt;무인결제솔루션 문의 UNOSPAY&gt;Te1.1800-4520</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    
+
+    <article class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">KakaoTalk_20260408_190630511_02.jpg</h3>
+          <div class="card-subtitle">
+            유형: physical_receipt
+            · split: -
+            · 난이도: -
+          </div>
+        </div>
+        <div class="status fail">
+          FAIL
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="image-panel">
+          <img src="../physical/KakaoTalk_20260408_190630511_02.jpg" alt="KakaoTalk_20260408_190630511_02.jpg" />
+          <div class="chip-row">
+            <span class="chip">engine: paddleocr</span>
+            <span class="chip">variant: adaptive_binary</span>
+            <span class="chip">avg_conf: 0.9525</span>
+            <span class="chip">lines: 48</span>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <h3>최종 추출 결과</h3>
+            <table class="field-table"><tr><th>항목</th><td>정답</td><td>예측</td></tr><tr><th>날짜</th><td>2026-04-04</td><td class="prediction-ok">2026-04-04</td></tr><tr><th>상호명</th><td>CU 구의본점</td><td class="prediction-ok">CU구의본점</td></tr><tr><th>금액</th><td>6360</td><td class="prediction-fail">360</td></tr><tr><th>결제수단</th><td>online_payment</td><td class="prediction-ok">online_payment</td></tr></table>
+          </section>
+
+          <section class="panel">
+            <h3>파이프라인 요약</h3>
+            <table class="field-table">
+              <tr><th>stage</th><td>perspective_correction, background_removal, document_enhancement, adaptive_binarization</td></tr>
+              <tr><th>selected</th><td>adaptive_binary</td></tr>
+              <tr><th>field fusion</th><td><pre>{
+  &quot;normalized_fields&quot;: {
+    &quot;date&quot;: &quot;2026-04-04&quot;,
+    &quot;merchant&quot;: &quot;CU구의본점&quot;,
+    &quot;amount&quot;: &quot;360&quot;,
+    &quot;payment&quot;: &quot;online_payment&quot;
+  },
+  &quot;sources&quot;: {
+    &quot;date&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 140.2267,
+      &quot;average_confidence&quot;: 0.9844
+    },
+    &quot;merchant&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 146.2267,
+      &quot;average_confidence&quot;: 0.9844
+    },
+    &quot;amount&quot;: {
+      &quot;preprocessing&quot;: &quot;adaptive_binary&quot;,
+      &quot;score&quot;: 145.9292,
+      &quot;average_confidence&quot;: 0.9525
+    },
+    &quot;payment&quot;: {
+      &quot;preprocessing&quot;: &quot;background_cropped&quot;,
+      &quot;score&quot;: 140.2267,
+      &quot;average_confidence&quot;: 0.9844
+    }
+  }
+}</pre></td></tr>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>선택된 시도 결과</h3>
+            <pre>{
+  &quot;evidence_date&quot;: &quot;2026-04-04&quot;,
+  &quot;merchant_name&quot;: &quot;CU구의본점&quot;,
+  &quot;amount&quot;: &quot;360&quot;,
+  &quot;payment_method&quot;: &quot;online_payment&quot;,
+  &quot;confidence&quot;: 1.0
+}</pre>
+          </section>
+
+          <section class="panel">
+            <h3>OCR 원문 텍스트</h3>
+            <pre>Again
+****** 영수종조회발행인쇄 ***
+CU구의본점
+사업자등목번호:2074102918
+서음별시광진구자양로22김51전
+TEL:0
+정부 방침으로 교환/환불 시 영수증
+지참하셔야 합니다.(결제카드 지참)
+30일 내 구매 점포 방문
+*식품선도유지상품 및 일부품목제외
+33462
+2026-04-04(토) P0S-01
+칠성사이다제로P500
+1
+2,300
+칠성사이다제로P500
+1
+증
+정
+PBICK)고구마말독템
+2, 500
+1
+닭가슴살오리지널
+1
+1, 900
+*플러스 멤버십 할인
+-340
+종구매액
+6, 360
+과세물품가액
+5,782
+부&quot;가세
+578
+*결 제 금액
+6, 360
+네이버페이
+6,360
+* 네이버 페이 **
+카드번호:9200-7700-****-368*
+카드회사:NM
+네이버페이머니
+합부개월:00
+승인번호:21752840
+결제금액:
+6, 360
+*표시 상품은 부가세 면세 품목 임.
+객층:00담당:00 N0:3859 15:19
+92026040433462013859</pre>
+          </section>
+        </div>
+      </div>
+    </article>
+    </section>
+  </div>
+</body>
+</html>

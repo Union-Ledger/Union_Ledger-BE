@@ -14,9 +14,9 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://union_ledger:union_ledger@localhost:5432/union_ledger"
     )
     storage_root: Path = Path("storage")
-    tesseract_cmd: str = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    tessdata_dir: Path = Path("storage/tessdata")
-    ocr_languages: str = "kor+eng"
+    ocr_engine: str = "paddleocr"
+    paddleocr_lang: str = "korean"
+    ocr_min_line_confidence: float = 0.25
     allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://localhost:5173"]
     )
@@ -42,15 +42,6 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return Path(value)
         return Path("storage")
-
-    @field_validator("tessdata_dir", mode="before")
-    @classmethod
-    def parse_tessdata_dir(cls, value: object) -> Path:
-        if isinstance(value, Path):
-            return value
-        if isinstance(value, str):
-            return Path(value)
-        return Path("storage/tessdata")
 
     model_config = SettingsConfigDict(
         env_file=".env",

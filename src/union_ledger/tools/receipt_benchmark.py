@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 import unicodedata
 from dataclasses import asdict, dataclass
@@ -25,6 +26,8 @@ class GroundTruthRow:
     expected_amount: Decimal | None
     expected_payment_method: PaymentMethod | None
     notes: str | None
+    split: str | None
+    difficulty: str | None
 
 
 @dataclass(slots=True)
@@ -41,11 +44,14 @@ class ReceiptEvaluation:
     file_name: str
     evidence_type: EvidenceType
     notes: str | None
+    split: str | None
+    difficulty: str | None
     overall_pass: bool
     date_result: FieldEvaluation
     merchant_result: FieldEvaluation
     amount_result: FieldEvaluation
     payment_method_result: FieldEvaluation
+    failure_reasons: list[str]
     extraction_payload: dict[str, Any]
     raw_text_preview: str
 
@@ -72,14 +78,14 @@ def load_ground_truth(csv_path: Path) -> list[GroundTruthRow]:
                     file_name=file_name,
                     evidence_type=evidence_type,
                     expected_date=_parse_date(row.get("expected_date")),
-                    expected_merchant_name=_clean_optional_text(
-                        row.get("expected_merchant_name")
-                    ),
+                    expected_merchant_name=_clean_optional_text(row.get("expected_merchant_name")),
                     expected_amount=_parse_decimal(row.get("expected_amount")),
                     expected_payment_method=_parse_payment_method(
                         row.get("expected_payment_method")
                     ),
                     notes=_clean_optional_text(row.get("notes")),
+                    split=_clean_optional_text(row.get("split")),
+                    difficulty=_clean_optional_text(row.get("difficulty")),
                 )
             )
     return rows
@@ -92,16 +98,17 @@ def evaluate_receipts(
     output_path: Path | None = None,
 ) -> dict[str, Any]:
     extractor = EvidenceExtractionService()
-    rows = load_ground_truth(ground_truth_path)
     evaluations: list[ReceiptEvaluation] = []
 
-    for row in rows:
+    for row in load_ground_truth(ground_truth_path):
         sample_path = _resolve_sample_path(samples_root, row.file_name)
         result = extractor.extract_file(sample_path, row.evidence_type)
         evaluation = ReceiptEvaluation(
             file_name=row.file_name,
             evidence_type=row.evidence_type,
             notes=row.notes,
+            split=row.split,
+            difficulty=row.difficulty,
             overall_pass=False,
             date_result=_evaluate_scalar(
                 expected=row.expected_date.isoformat() if row.expected_date else None,
@@ -119,8 +126,9 @@ def evaluate_receipts(
                 expected=row.expected_payment_method.value if row.expected_payment_method else None,
                 predicted=result.payment_method.value if result.payment_method else None,
             ),
+            failure_reasons=[],
             extraction_payload=result.payload,
-            raw_text_preview=result.raw_text[:500],
+            raw_text_preview=result.raw_text[:600],
         )
         evaluation.overall_pass = all(
             (
@@ -130,47 +138,31 @@ def evaluate_receipts(
                 evaluation.payment_method_result.exact_match,
             )
         )
+        evaluation.failure_reasons = _classify_failure_reasons(evaluation)
         evaluations.append(evaluation)
 
     report = {
         "ground_truth_path": str(ground_truth_path),
         "samples_root": str(samples_root),
         "summary": _build_summary(evaluations),
-        "evaluations": [_serialize_evaluation(evaluation) for evaluation in evaluations],
+        "evaluations": [_serialize_evaluation(item) for item in evaluations],
     }
-
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark OCR results against labeled receipts.")
-    parser.add_argument(
-        "--samples-root",
-        default="samples/receipts",
-        help="Root folder containing receipt sample subdirectories.",
-    )
-    parser.add_argument(
-        "--ground-truth",
-        default=None,
-        help="CSV file with labeled ground truth rows.",
-    )
-    parser.add_argument(
-        "--output",
-        default=None,
-        help="Optional JSON report output path.",
-    )
+    parser.add_argument("--samples-root", default="samples/receipts")
+    parser.add_argument("--ground-truth", default=None)
+    parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
     samples_root = Path(args.samples_root).resolve()
     ground_truth_path = _resolve_ground_truth_path(samples_root, args.ground_truth)
     output_path = Path(args.output).resolve() if args.output else None
-
     report = evaluate_receipts(
         samples_root=samples_root,
         ground_truth_path=ground_truth_path,
@@ -184,14 +176,10 @@ def _resolve_ground_truth_path(samples_root: Path, explicit_path: str | None) ->
     if explicit_path:
         return Path(explicit_path).resolve()
 
-    local_path = samples_root / "ground_truth.local.csv"
-    if local_path.exists():
-        return local_path
-
-    template_path = samples_root / "ground_truth.template.csv"
-    if template_path.exists():
-        return template_path
-
+    for candidate_name in ("ground_truth.local.csv", "ground_truth.template.csv"):
+        candidate = samples_root / candidate_name
+        if candidate.exists():
+            return candidate
     raise FileNotFoundError("ground truth CSV 파일을 찾지 못했습니다.")
 
 
@@ -238,7 +226,6 @@ def _evaluate_merchant_name(expected: str | None, predicted: str | None) -> Fiel
             SequenceMatcher(None, normalized_expected, normalized_predicted).ratio(),
             4,
         )
-
     return FieldEvaluation(
         expected=expected,
         predicted=predicted,
@@ -250,21 +237,102 @@ def _evaluate_merchant_name(expected: str | None, predicted: str | None) -> Fiel
 
 def _build_summary(evaluations: list[ReceiptEvaluation]) -> dict[str, Any]:
     total = len(evaluations)
-    date_hits = sum(item.date_result.exact_match for item in evaluations)
-    merchant_hits = sum(item.merchant_result.normalized_match for item in evaluations)
-    amount_hits = sum(item.amount_result.exact_match for item in evaluations)
-    payment_hits = sum(item.payment_method_result.exact_match for item in evaluations)
-    overall_hits = sum(item.overall_pass for item in evaluations)
-
-    return {
+    summary = {
         "total_samples": total,
-        "overall_pass_count": overall_hits,
-        "overall_pass_rate": _rate(overall_hits, total),
-        "date_accuracy": _rate(date_hits, total),
-        "merchant_accuracy": _rate(merchant_hits, total),
-        "amount_accuracy": _rate(amount_hits, total),
-        "payment_method_accuracy": _rate(payment_hits, total),
+        "overall_pass_count": sum(item.overall_pass for item in evaluations),
+        "overall_pass_rate": _rate(sum(item.overall_pass for item in evaluations), total),
+        "date_accuracy": _rate(sum(item.date_result.exact_match for item in evaluations), total),
+        "merchant_accuracy": _rate(
+            sum(item.merchant_result.normalized_match for item in evaluations),
+            total,
+        ),
+        "amount_accuracy": _rate(
+            sum(item.amount_result.exact_match for item in evaluations),
+            total,
+        ),
+        "payment_method_accuracy": _rate(
+            sum(item.payment_method_result.exact_match for item in evaluations),
+            total,
+        ),
+        "failure_reason_counts": _count_failure_reasons(evaluations),
+        "split_counts": _count_attr(evaluations, "split"),
+        "difficulty_counts": _count_attr(evaluations, "difficulty"),
     }
+    return summary
+
+
+def _count_failure_reasons(evaluations: list[ReceiptEvaluation]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for evaluation in evaluations:
+        for reason in evaluation.failure_reasons:
+            counts[reason] = counts.get(reason, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _count_attr(evaluations: list[ReceiptEvaluation], attr_name: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for evaluation in evaluations:
+        value = getattr(evaluation, attr_name) or "unspecified"
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: item[0]))
+
+
+def _classify_failure_reasons(evaluation: ReceiptEvaluation) -> list[str]:
+    if evaluation.overall_pass:
+        return []
+
+    reasons: list[str] = []
+    merchant_prediction = evaluation.merchant_result.predicted or ""
+    raw_text = evaluation.raw_text_preview or ""
+    notes = evaluation.notes or ""
+
+    if not evaluation.merchant_result.normalized_match:
+        if _contains_any(merchant_prediction, ("영수증", "조회", "발행")):
+            reasons.append("merchant_header_noise")
+        if _contains_any(
+            merchant_prediction + "\n" + raw_text,
+            ("서울", "경기", "광진구", "자양로"),
+        ):
+            reasons.append("merchant_address_noise")
+        if not any(reason.startswith("merchant_") for reason in reasons):
+            reasons.append("merchant_parse")
+
+    if not evaluation.amount_result.exact_match:
+        predicted_amount = _safe_decimal(evaluation.amount_result.predicted)
+        expected_amount = _safe_decimal(evaluation.amount_result.expected)
+        if _amount_matches_business_number(raw_text, evaluation.amount_result.predicted):
+            reasons.append("amount_business_number")
+        elif (
+            predicted_amount is not None
+            and expected_amount is not None
+            and predicted_amount < expected_amount
+            and expected_amount - predicted_amount >= Decimal("1000")
+        ):
+            reasons.append("amount_line_item_selected")
+        else:
+            reasons.append("amount_parse")
+
+    if not evaluation.payment_method_result.exact_match:
+        if evaluation.payment_method_result.predicted == PaymentMethod.ONLINE_PAYMENT.value:
+            reasons.append("payment_false_online")
+        else:
+            reasons.append("payment_parse")
+
+    if not evaluation.date_result.exact_match:
+        reasons.append("date_parse")
+
+    mismatch_count = sum(
+        (
+            not evaluation.date_result.exact_match,
+            not evaluation.merchant_result.normalized_match,
+            not evaluation.amount_result.exact_match,
+            not evaluation.payment_method_result.exact_match,
+        )
+    )
+    if mismatch_count >= 2 and _contains_any(notes, ("구겨", "어두", "흐림", "그림자")):
+        reasons.append("image_quality_low")
+
+    return reasons
 
 
 def _serialize_evaluation(evaluation: ReceiptEvaluation) -> dict[str, Any]:
@@ -285,40 +353,48 @@ def _print_report(report: dict[str, Any]) -> None:
         f" amount={summary['amount_accuracy']:.2%},"
         f" payment={summary['payment_method_accuracy']:.2%}"
     )
+    if summary["failure_reason_counts"]:
+        _console_print(
+            "- failure reasons: "
+            + ", ".join(
+                f"{reason}={count}" for reason, count in summary["failure_reason_counts"].items()
+            )
+        )
     _console_print()
 
     for evaluation in report["evaluations"]:
         status_label = "PASS" if evaluation["overall_pass"] else "FAIL"
         _console_print(f"[{status_label}] {evaluation['file_name']}")
         _console_print(
-            "  date:"
-            f" {evaluation['date_result']['predicted']} / {evaluation['date_result']['expected']}"
+            "  date: "
+            f"{evaluation['date_result']['predicted']} / "
+            f"{evaluation['date_result']['expected']}"
         )
         _console_print(
-            "  merchant:"
-            f" {evaluation['merchant_result']['predicted']}"
-            f" / {evaluation['merchant_result']['expected']}"
+            "  merchant: "
+            f"{evaluation['merchant_result']['predicted']} / "
+            f"{evaluation['merchant_result']['expected']}"
         )
         _console_print(
-            "  amount:"
-            f" {evaluation['amount_result']['predicted']}"
-            f" / {evaluation['amount_result']['expected']}"
+            "  amount: "
+            f"{evaluation['amount_result']['predicted']} / "
+            f"{evaluation['amount_result']['expected']}"
         )
         _console_print(
-            "  payment:"
-            " "
-            f"{evaluation['payment_method_result']['predicted']}"
-            " / "
+            "  payment: "
+            f"{evaluation['payment_method_result']['predicted']} / "
             f"{evaluation['payment_method_result']['expected']}"
         )
         selected_attempt = evaluation["extraction_payload"].get("selected_attempt")
         if selected_attempt:
             _console_print(
-                "  selected:"
-                f" preprocessing={selected_attempt['preprocessing']},"
-                f" psm={selected_attempt['psm']},"
-                f" score={selected_attempt['score']}"
+                "  selected: "
+                f"variant={selected_attempt['preprocessing']}, "
+                f"avg_conf={selected_attempt['average_confidence']}, "
+                f"score={selected_attempt['score']}"
             )
+        if evaluation["failure_reasons"]:
+            _console_print(f"  reasons: {', '.join(evaluation['failure_reasons'])}")
         _console_print()
 
 
@@ -349,6 +425,19 @@ def _parse_payment_method(value: str | None) -> PaymentMethod | None:
     cleaned_value = _clean_optional_text(value)
     if cleaned_value is None:
         return None
+
+    aliases = {
+        "naver_pay": PaymentMethod.ONLINE_PAYMENT,
+        "naverpay": PaymentMethod.ONLINE_PAYMENT,
+        "kakao_pay": PaymentMethod.ONLINE_PAYMENT,
+        "kakaopay": PaymentMethod.ONLINE_PAYMENT,
+        "toss_pay": PaymentMethod.ONLINE_PAYMENT,
+        "tosspay": PaymentMethod.ONLINE_PAYMENT,
+    }
+    alias_match = aliases.get(cleaned_value.lower())
+    if alias_match is not None:
+        return alias_match
+
     try:
         return PaymentMethod(cleaned_value)
     except ValueError as exc:
@@ -367,6 +456,33 @@ def _normalize_match_text(value: str | None) -> str:
         return ""
     normalized = unicodedata.normalize("NFKC", value).lower()
     return "".join(character for character in normalized if character.isalnum())
+
+
+def _contains_any(value: str, keywords: tuple[str, ...]) -> bool:
+    lowered = value.lower()
+    return any(keyword.lower() in lowered for keyword in keywords)
+
+
+def _safe_decimal(value: str | None) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return Decimal(value)
+    except InvalidOperation:
+        return None
+
+
+def _amount_matches_business_number(text: str, value: str | None) -> bool:
+    if not value:
+        return False
+    normalized_value = re.sub(r"\D", "", value)
+    if not normalized_value:
+        return False
+    for match in re.finditer(r"\d{2,3}\s*-\s*\d{2}\s*-\s*\d{4,5}", text):
+        business_number = re.sub(r"\D", "", match.group(0))
+        if normalized_value in business_number:
+            return True
+    return False
 
 
 def _console_print(message: str = "") -> None:

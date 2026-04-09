@@ -52,6 +52,7 @@ class ExtractionMethod(StrEnum):
 
 class PaymentMethod(StrEnum):
     CARD = "card"
+    CASH = "cash"
     BANK_TRANSFER = "bank_transfer"
     ONLINE_PAYMENT = "online_payment"
     OTHER = "other"
@@ -91,4 +92,3 @@ class NotificationType(StrEnum):
     AUDIT_REJECTED = "audit_rejected"
     SETTLEMENT_RESUBMITTED = "settlement_resubmitted"
     SETTLEMENT_PUBLISHED = "settlement_published"
-

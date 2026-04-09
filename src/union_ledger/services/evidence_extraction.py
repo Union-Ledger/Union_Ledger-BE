@@ -1,16 +1,15 @@
 from __future__ import annotations
 
+import os
 import re
-import shutil
-import subprocess
 import tempfile
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from difflib import SequenceMatcher
-from io import BytesIO
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 from union_ledger.core.config import Settings, get_settings
@@ -18,96 +17,136 @@ from union_ledger.models.enums import EvidenceType, ExtractionMethod, PaymentMet
 from union_ledger.services.file_storage import SUPPORTED_EVIDENCE_SUFFIXES
 
 IMAGE_SUFFIXES = SUPPORTED_EVIDENCE_SUFFIXES - {".pdf"}
-DATE_KEYWORDS = ("거래일", "거래일시", "승인일", "승인일시", "결제일", "일시", "날짜", "date")
-RECEIPT_HINT_KEYWORDS = (
-    "승인",
-    "승인번호",
-    "카드",
-    "매출",
-    "합계",
-    "총액",
+PIPELINE_STAGES = (
+    "perspective_correction",
+    "background_removal",
+    "document_enhancement",
+    "adaptive_binarization",
+)
+
+DATE_KEYWORDS = (
+    "거래일시",
+    "거래일자",
+    "거래일",
+    "결제일시",
+    "결제일자",
+    "승인일시",
+    "승인일자",
+    "판매일시",
+    "판매시간",
+    "일시",
+    "날짜",
+    "date",
+)
+MERCHANT_LABELS = (
+    "가맹점명",
     "가맹점",
-    "금액",
+    "상호명",
+    "상호",
+    "점포명",
+    "점포",
+    "판매처",
+    "매장명",
+    "merchant",
+    "store",
 )
-TRANSFER_HINT_KEYWORDS = ("거래일", "이체", "출금계좌", "입금", "받는분")
-ONLINE_HINT_KEYWORDS = ("주문", "결제", "페이", "pay", "온라인")
-MERCHANT_PATTERNS = (
-    r"(?:가맹점멸|가맹절명|가맹점명|가맹점|상호명|상호|사용처|판매처|merchant|store|받는분)\s*[:：]?\s*(.+)",
-)
-MERCHANT_STOPWORDS = (
-    "사업자",
-    "대표",
-    "전화",
-    "tel",
+MERCHANT_NOISE_KEYWORDS = (
+    "영수증",
+    "조회",
+    "발행",
+    "고객용",
     "승인",
-    "거래",
     "결제",
-    "금액",
-    "합계",
-    "총액",
-    "카드",
-    "vat",
+    "거래",
+    "사업자",
+    "전화",
+    "주소",
+    "대표자",
     "부가세",
     "공급가액",
-    "계좌",
+    "면세",
+    "과세",
+    "카드",
+    "현금",
+    "합계",
+    "총계",
+    "총액",
+    "금액",
     "주문",
     "번호",
-    "테이블",
-    "take out",
-    "kiosk",
     "포스",
     "pos",
-    "편리합니다",
-    "helpdesk",
 )
-MERCHANT_BOOST_KEYWORDS = (
-    "카페",
-    "식당",
-    "주유",
-    "영업소",
-    "매점",
-    "도로공사",
-    "학생회관",
-    "오일뱅크",
-    "휴게소",
-    "점",
+ADDRESS_HINTS = (
+    "서울",
+    "경기",
+    "인천",
+    "광진구",
+    "송파구",
+    "강남구",
+    "자양로",
+    "능동로",
+    "로 ",
+    "길 ",
+    "층",
+    "동",
 )
-AMOUNT_KEYWORDS = {
-    "총 결제금액": 10,
-    "총결제금액": 10,
-    "결제금액": 9,
-    "승인금액": 9,
-    "이체금액": 9,
-    "총액": 8,
-    "합계": 8,
-    "청구금액": 7,
-    "출금액": 7,
-    "금액": 5,
-    "amount": 6,
-    "total": 6,
-    "paid": 5,
-}
+TOTAL_HINTS = (
+    "결제금액",
+    "승인금액",
+    "합계",
+    "총계",
+    "총액",
+    "청구금액",
+    "받을금액",
+    "판매합계",
+    "이체금액",
+    "출금금액",
+    "입금금액",
+    "amount",
+    "total",
+    "paid",
+)
+AMOUNT_REJECTION_KEYWORDS = (
+    "사업자",
+    "전화",
+    "tel",
+    "승인번호",
+    "거래번호",
+    "카드번호",
+    "주문번호",
+    "매출전표",
+    "단말기",
+    "가맹점번호",
+)
+ONLINE_PAYMENT_KEYWORDS = (
+    "네이버페이",
+    "naver pay",
+    "naverpay",
+    "카카오페이",
+    "kakao pay",
+    "kakaopay",
+    "토스페이",
+    "toss pay",
+    "tosspay",
+)
+CASH_KEYWORDS = ("현금", "cash", "거스름돈", "받을금액", "현금영수증")
+CARD_KEYWORDS = ("카드", "신용", "체크", "승인번호", "승인", "visa", "master")
+BANK_TRANSFER_KEYWORDS = ("이체", "출금", "입금", "계좌", "송금", "받는분", "은행")
+
 DATE_PATTERNS = (
     re.compile(
         r"(?P<year>\d{4})\s*[-./년]\s*(?P<month>\d{1,2})\s*[-./월]\s*(?P<day>\d{1,2})"
     ),
     re.compile(r"(?P<year>\d{2})[./-](?P<month>\d{1,2})[./-](?P<day>\d{1,2})"),
     re.compile(
-        r"(?P<year>\d{4})\s*(?:년)?\s*(?P<month>\d{1,2})\s*월\s*(?P<day>\d{1,2})\s*일"
+        r"(?P<year>\d{4})\s*년\s*(?P<month>\d{1,2})\s*월\s*(?P<day>\d{1,2})\s*일"
     ),
+    re.compile(r"(?P<year>20\d{2})(?P<month>\d{2})(?P<day>\d{2})(?!\d)"),
 )
-AMOUNT_PATTERN = re.compile(r"(?<!\d)(\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?(?!\d)")
-CURRENCY_HINTS = ("원", "krw", "￦", "won")
-AMOUNT_CONTEXT_REJECTION_KEYWORDS = ("번호", "전화", "tel", "사업자", "pos", "포스", "주문")
-MERCHANT_FIXUP_PATTERNS = (
-    (re.compile(r"학생외[관과]"), "학생회관"),
-    (re.compile(r"학[새붕]식[당비]"), "학생식당"),
-    (re.compile(r"항국도로공사|하국도로공사"), "한국도로공사"),
-    (re.compile(r"[ᄀㄱ]리남양영업소"), "구리남양영업소"),
-    (re.compile(r"참원|잠원"), "창원"),
-    (re.compile(r"시더불뮤|시더블뮤|더불뮤|더블뮤"), "씨더블유"),
-    (re.compile(r"요월빙크|오일빙크|오잃뱅크"), "오일뱅크"),
-)
+AMOUNT_PATTERN = re.compile(r"(?<!\d)(\d{1,3}(?:,\d{3})+|\d{3,9})(?:\.\d{1,2})?(?!\d)")
+BUSINESS_NUMBER_PATTERN = re.compile(r"\d{2,3}\s*-\s*\d{2}\s*-\s*\d{4,5}")
+PHONE_PATTERN = re.compile(r"(?:\d{2,4}-\d{3,4}-\d{4})|(?:1[568]\d{2}-\d{4})")
 
 
 class ExtractionError(RuntimeError):
@@ -128,12 +167,23 @@ class ParsedEvidenceFields:
 
 
 @dataclass(slots=True)
+class OCRLine:
+    text: str
+    confidence: float
+    box: list[list[float]]
+    y: float
+    x: float
+
+
+@dataclass(slots=True)
 class OCRAttempt:
     preprocessing: str
-    psm: int
     raw_text: str
     parsed: ParsedEvidenceFields
     score: float
+    average_confidence: float = 0.0
+    line_count: int = 0
+    lines: tuple[OCRLine, ...] = ()
 
 
 @dataclass(slots=True)
@@ -155,33 +205,59 @@ class ExtractionResult:
     payload: dict[str, Any]
 
 
+@dataclass(slots=True)
+class _FieldChoice:
+    value: Any
+    score: float
+    attempt: OCRAttempt
+
+
+@dataclass(slots=True)
+class _AmountCandidate:
+    value: Decimal
+    score: float
+    line_index: int
+    line: str
+    has_total_hint: bool = False
+
+
 def normalize_extracted_text(text: str) -> str:
     normalized = unicodedata.normalize("NFKC", text)
     cleaned_lines: list[str] = []
-    for line in normalized.splitlines():
-        compact = re.sub(r"\s+", " ", line).strip(" \t|")
+    for raw_line in normalized.splitlines():
+        compact = re.sub(r"\s+", " ", raw_line).strip(" \t|")
         compact = compact.replace("₩", "원")
         if compact:
             cleaned_lines.append(compact)
     return "\n".join(cleaned_lines)
 
 
-def parse_extracted_text(text: str, evidence_type: EvidenceType) -> ParsedEvidenceFields:
+def parse_extracted_text(
+    text: str,
+    evidence_type: EvidenceType,
+    *,
+    ocr_lines: list[OCRLine] | None = None,
+) -> ParsedEvidenceFields:
     normalized_text = normalize_extracted_text(text)
-    lines = [line.strip() for line in normalized_text.splitlines() if line.strip()]
-    evidence_date = _extract_date(lines)
-    amount = _extract_amount(lines)
-    merchant_name = _extract_merchant_name(lines)
-    payment_method = _extract_payment_method(normalized_text, evidence_type)
-    found_count = sum(
-        value is not None for value in (evidence_date, merchant_name, amount, payment_method)
-    )
+    lines = _build_receipt_lines(normalized_text, ocr_lines)
+
+    evidence_date = _extract_date_from_layout(lines)
+    merchant_name = _extract_merchant_from_layout(lines, evidence_type)
+    payment_method = _extract_payment_method_from_layout(lines, evidence_type)
+    amount = _extract_amount_from_layout(lines, evidence_type, payment_method=payment_method)
+
+    confidence = 0.0
+    confidence += 0.25 if evidence_date else 0.0
+    confidence += 0.3 if merchant_name else 0.0
+    confidence += 0.3 if amount is not None else 0.0
+    confidence += 0.15 if payment_method else 0.0
+
     return ParsedEvidenceFields(
         evidence_date=evidence_date,
         merchant_name=merchant_name,
         amount=amount,
         payment_method=payment_method,
-        confidence=round(found_count / 4, 2),
+        confidence=round(min(confidence, 1.0), 4),
     )
 
 
@@ -190,52 +266,89 @@ def build_ocr_attempt(
     evidence_type: EvidenceType,
     *,
     preprocessing: str,
-    psm: int,
+    average_confidence: float = 0.0,
+    line_count: int = 0,
+    lines: list[OCRLine] | None = None,
 ) -> OCRAttempt:
     normalized_text = normalize_extracted_text(raw_text)
-    parsed = parse_extracted_text(normalized_text, evidence_type)
-    score = _score_ocr_attempt(normalized_text, parsed, evidence_type, preprocessing, psm)
+    parsed = parse_extracted_text(normalized_text, evidence_type, ocr_lines=lines)
+    score = _score_ocr_attempt(
+        normalized_text,
+        parsed,
+        evidence_type,
+        preprocessing=preprocessing,
+        average_confidence=average_confidence,
+        line_count=line_count,
+    )
     return OCRAttempt(
         preprocessing=preprocessing,
-        psm=psm,
         raw_text=normalized_text,
         parsed=parsed,
         score=score,
+        average_confidence=average_confidence,
+        line_count=line_count,
+        lines=tuple(lines or ()),
     )
 
 
 def select_best_ocr_attempt(attempts: list[OCRAttempt]) -> OCRAttempt:
-    populated_attempts = [attempt for attempt in attempts if attempt.raw_text]
-    if not populated_attempts:
-        raise ExtractionError("텍스트를 추출하지 못했습니다.")
-    return max(populated_attempts, key=lambda attempt: (attempt.score, len(attempt.raw_text)))
+    if not attempts:
+        raise ExtractionError("선택할 OCR 시도가 없습니다.")
+    return max(attempts, key=lambda attempt: (attempt.score, attempt.average_confidence))
 
 
 def merge_ocr_attempt_fields(
     attempts: list[OCRAttempt],
     evidence_type: EvidenceType,
 ) -> ParsedEvidenceFields:
-    evidence_date = _select_best_date(attempts)
-    merchant_name = _select_best_merchant_name(attempts)
-    amount = _select_best_amount(attempts)
-    payment_method = _select_best_payment_method(attempts, evidence_type)
-    found_count = sum(
-        value is not None for value in (evidence_date, merchant_name, amount, payment_method)
+    del evidence_type
+    if not attempts:
+        raise ExtractionError("병합할 OCR 시도가 없습니다.")
+
+    date_choice = _select_field_choice(
+        attempts,
+        lambda attempt: attempt.parsed.evidence_date,
+        lambda attempt: _field_score(attempt, "date"),
     )
+    merchant_choice = _select_field_choice(
+        attempts,
+        lambda attempt: attempt.parsed.merchant_name,
+        lambda attempt: _field_score(attempt, "merchant"),
+    )
+    amount_choice = _select_field_choice(
+        attempts,
+        lambda attempt: attempt.parsed.amount,
+        lambda attempt: _field_score(attempt, "amount"),
+    )
+    payment_choice = _select_field_choice(
+        attempts,
+        lambda attempt: attempt.parsed.payment_method,
+        lambda attempt: _field_score(attempt, "payment"),
+    )
+
+    confidence_components = [
+        choice.score for choice in (date_choice, merchant_choice, amount_choice, payment_choice)
+        if choice is not None
+    ]
+    confidence = (
+        sum(confidence_components) / len(confidence_components)
+        if confidence_components
+        else 0
+    )
+
     return ParsedEvidenceFields(
-        evidence_date=evidence_date,
-        merchant_name=merchant_name,
-        amount=amount,
-        payment_method=payment_method,
-        confidence=round(found_count / 4, 2),
+        evidence_date=date_choice.value if date_choice else None,
+        merchant_name=merchant_choice.value if merchant_choice else None,
+        amount=amount_choice.value if amount_choice else None,
+        payment_method=payment_choice.value if payment_choice else None,
+        confidence=round(min(confidence / 100, 1.0), 4),
     )
 
 
 class EvidenceExtractionService:
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
-        self._resolved_tessdata_dir: Path | None = None
-        self._validated_languages: tuple[str, ...] | None = None
+        self._paddle_ocr_engine: Any | None = None
 
     def extract_upload(
         self,
@@ -244,191 +357,55 @@ class EvidenceExtractionService:
         evidence_type: EvidenceType,
     ) -> ExtractionResult:
         suffix = Path(filename).suffix.lower()
-        if suffix == ".pdf":
-            return self._build_result(
-                source_file_name=filename,
-                evidence_type=evidence_type,
-                method=ExtractionMethod.PDF_TEXT,
-                raw_text=self._extract_pdf_text(content),
-                engine="pypdf",
-            )
-        if suffix in IMAGE_SUFFIXES:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-                tmp_file.write(content)
-                tmp_path = Path(tmp_file.name)
-            try:
-                return self._extract_image_result(tmp_path, filename, evidence_type)
-            finally:
-                tmp_path.unlink(missing_ok=True)
-        supported = ", ".join(sorted(SUPPORTED_EVIDENCE_SUFFIXES))
-        raise ExtractionError(f"지원하지 않는 파일 형식입니다. 지원 확장자: {supported}")
+        if suffix not in SUPPORTED_EVIDENCE_SUFFIXES:
+            raise ExtractionError(f"지원하지 않는 파일 형식입니다: {suffix}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir) / filename
+            temp_path.write_bytes(content)
+            return self.extract_file(temp_path, evidence_type)
 
     def extract_file(self, file_path: Path, evidence_type: EvidenceType) -> ExtractionResult:
         suffix = file_path.suffix.lower()
         if suffix == ".pdf":
-            return self._build_result(
-                source_file_name=file_path.name,
-                evidence_type=evidence_type,
-                method=ExtractionMethod.PDF_TEXT,
-                raw_text=self._extract_pdf_text(file_path.read_bytes()),
-                engine="pypdf",
-            )
-        if suffix in IMAGE_SUFFIXES:
-            return self._extract_image_result(file_path, file_path.name, evidence_type)
-        supported = ", ".join(sorted(SUPPORTED_EVIDENCE_SUFFIXES))
-        raise ExtractionError(f"지원하지 않는 파일 형식입니다. 지원 확장자: {supported}")
+            return self._extract_pdf_result(file_path, evidence_type)
+        if suffix not in IMAGE_SUFFIXES:
+            raise ExtractionError(f"지원하지 않는 파일 형식입니다: {suffix}")
+        return self._extract_image_result(file_path, evidence_type)
 
-    def _extract_image_result(
-        self,
-        file_path: Path,
-        source_file_name: str,
-        evidence_type: EvidenceType,
-    ) -> ExtractionResult:
-        attempts = self._collect_image_ocr_attempts(file_path, evidence_type)
-        best_attempt = select_best_ocr_attempt(attempts)
-        merged_fields = merge_ocr_attempt_fields(attempts, evidence_type)
-        payload = {
-            "selected_attempt": self._serialize_ocr_attempt(best_attempt),
-            "attempts": [self._serialize_ocr_attempt(attempt) for attempt in attempts],
-            "field_fusion": {
-                "enabled": True,
-                "normalized_fields": _serialize_parsed_fields(merged_fields),
-            },
-        }
-        return self._build_result(
-            source_file_name=source_file_name,
-            evidence_type=evidence_type,
-            method=ExtractionMethod.OCR,
-            raw_text=best_attempt.raw_text,
-            engine="tesseract",
-            extra_payload=payload,
-            parsed_override=merged_fields,
-        )
-
-    def _collect_image_ocr_attempts(
-        self,
-        file_path: Path,
-        evidence_type: EvidenceType,
-    ) -> list[OCRAttempt]:
-        attempts: list[OCRAttempt] = []
-        with tempfile.TemporaryDirectory() as temp_dir:
-            variants = self._prepare_image_variants(file_path, Path(temp_dir), evidence_type)
-            for variant in variants:
-                for psm in self._get_psm_modes(evidence_type):
-                    raw_text = self._run_tesseract_ocr(variant.path, psm)
-                    attempt = build_ocr_attempt(
-                        raw_text,
-                        evidence_type,
-                        preprocessing=variant.label,
-                        psm=psm,
-                    )
-                    if attempt.raw_text:
-                        attempts.append(attempt)
-        return attempts
-
-    def _prepare_image_variants(
-        self,
-        file_path: Path,
-        temp_dir: Path,
-        evidence_type: EvidenceType,
-    ) -> list[PreparedImageVariant]:
+    def _extract_pdf_result(self, file_path: Path, evidence_type: EvidenceType) -> ExtractionResult:
         try:
-            from PIL import Image, ImageFilter, ImageOps
-        except ImportError:
-            return [PreparedImageVariant(label="original", path=file_path)]
+            from pypdf import PdfReader
+        except ImportError as exc:
+            raise ExtractionConfigurationError(
+                "PDF 텍스트 추출 의존성이 설치되지 않았습니다. `pypdf`를 설치해 주세요."
+            ) from exc
 
-        with Image.open(file_path) as source_image:
-            base_image = ImageOps.exif_transpose(source_image).convert("RGB")
-            base_image = self._resize_image_for_ocr(base_image, Image)
-            variants = [self._save_image_variant(temp_dir, base_image, "original")]
-            grayscale = ImageOps.autocontrast(ImageOps.grayscale(base_image))
-            sharpened = grayscale.filter(ImageFilter.SHARPEN)
+        try:
+            reader = PdfReader(str(file_path))
+            raw_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        except Exception as exc:
+            raise ExtractionError(f"PDF 텍스트 추출에 실패했습니다: {exc}") from exc
 
-            variants.append(
-                self._save_image_variant(
-                    temp_dir,
-                    grayscale,
-                    "grayscale_autocontrast",
-                )
-            )
-            variants.append(self._save_image_variant(temp_dir, sharpened, "sharpened"))
-
-            if evidence_type is EvidenceType.PHYSICAL_RECEIPT:
-                threshold = grayscale.point(lambda pixel: 255 if pixel > 170 else 0)
-                variants.append(self._save_image_variant(temp_dir, threshold, "threshold"))
-
-                width, height = threshold.size
-                if max(width, height) < 2200:
-                    resampling = getattr(Image, "Resampling", Image)
-                    upscaled = threshold.resize(
-                        (width * 2, height * 2),
-                        resampling.LANCZOS,
-                    )
-                    variants.append(
-                        self._save_image_variant(temp_dir, upscaled, "threshold_upscaled")
-                    )
-
-        return variants
-
-    def _resize_image_for_ocr(self, image: Any, image_module: Any) -> Any:
-        max_dimension = max(image.size)
-        target_max_dimension = 2200
-        if max_dimension <= target_max_dimension:
-            return image
-
-        scale = target_max_dimension / max_dimension
-        resized_size = (
-            max(1, int(image.size[0] * scale)),
-            max(1, int(image.size[1] * scale)),
-        )
-        resampling = getattr(image_module, "Resampling", image_module)
-        return image.resize(resized_size, resampling.LANCZOS)
-
-    def _save_image_variant(
-        self,
-        temp_dir: Path,
-        image: Any,
-        label: str,
-    ) -> PreparedImageVariant:
-        variant_path = temp_dir / f"{label}.png"
-        image.save(variant_path, format="PNG")
-        return PreparedImageVariant(label=label, path=variant_path)
-
-    def _get_psm_modes(self, evidence_type: EvidenceType) -> tuple[int, ...]:
-        if evidence_type is EvidenceType.PHYSICAL_RECEIPT:
-            return (4, 6, 11)
-        return (6, 11)
-
-    def _build_result(
-        self,
-        *,
-        source_file_name: str,
-        evidence_type: EvidenceType,
-        method: ExtractionMethod,
-        raw_text: str,
-        engine: str,
-        extra_payload: dict[str, Any] | None = None,
-        parsed_override: ParsedEvidenceFields | None = None,
-    ) -> ExtractionResult:
-        cleaned_text = normalize_extracted_text(raw_text)
-        if not cleaned_text:
-            raise ExtractionError("텍스트를 추출하지 못했습니다.")
-
-        parsed = parsed_override or parse_extracted_text(cleaned_text, evidence_type)
-        payload: dict[str, Any] = {
-            "engine": engine,
-            "raw_text": cleaned_text,
+        parsed = parse_extracted_text(raw_text, evidence_type)
+        payload = {
+            "engine": "pypdf",
+            "raw_text": normalize_extracted_text(raw_text),
             "confidence": parsed.confidence,
             "review_required": True,
             "normalized_fields": _serialize_parsed_fields(parsed),
+            "ocr_pipeline": {
+                "version": "v4",
+                "engine": "pypdf",
+                "stages": ["pdf_text_extraction"],
+                "selected_variants": [],
+            },
         }
-        if extra_payload:
-            payload.update(extra_payload)
         return ExtractionResult(
-            source_file_name=source_file_name,
+            source_file_name=file_path.name,
             evidence_type=evidence_type,
-            method=method,
-            raw_text=cleaned_text,
+            method=ExtractionMethod.PDF_TEXT,
+            raw_text=payload["raw_text"],
             evidence_date=parsed.evidence_date,
             merchant_name=parsed.merchant_name,
             amount=parsed.amount,
@@ -436,611 +413,1327 @@ class EvidenceExtractionService:
             payload=payload,
         )
 
-    def _extract_pdf_text(self, content: bytes) -> str:
+    def _extract_image_result(
+        self,
+        file_path: Path,
+        evidence_type: EvidenceType,
+    ) -> ExtractionResult:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            variants = self._prepare_image_variants(file_path, temp_root, evidence_type)
+            attempts = self._collect_image_ocr_attempts(variants, evidence_type)
+
+        best_attempt = select_best_ocr_attempt(attempts)
+        merged_fields = merge_ocr_attempt_fields(attempts, evidence_type)
+        field_fusion = self._build_field_fusion_payload(attempts)
+
+        payload = {
+            "engine": "paddleocr",
+            "raw_text": best_attempt.raw_text,
+            "confidence": merged_fields.confidence,
+            "review_required": True,
+            "normalized_fields": _serialize_parsed_fields(merged_fields),
+            "selected_attempt": self._serialize_ocr_attempt(best_attempt),
+            "field_fusion": field_fusion,
+            "attempts": [self._serialize_ocr_attempt(attempt) for attempt in attempts],
+            "ocr_pipeline": {
+                "version": "v4",
+                "engine": self._settings.ocr_engine,
+                "stages": list(PIPELINE_STAGES),
+                "selected_variants": [attempt.preprocessing for attempt in attempts],
+            },
+        }
+
+        return ExtractionResult(
+            source_file_name=file_path.name,
+            evidence_type=evidence_type,
+            method=ExtractionMethod.OCR,
+            raw_text=best_attempt.raw_text,
+            evidence_date=merged_fields.evidence_date,
+            merchant_name=merged_fields.merchant_name,
+            amount=merged_fields.amount,
+            payment_method=merged_fields.payment_method,
+            payload=payload,
+        )
+
+    def _collect_image_ocr_attempts(
+        self,
+        variants: list[PreparedImageVariant],
+        evidence_type: EvidenceType,
+    ) -> list[OCRAttempt]:
+        attempts: list[OCRAttempt] = []
+        for variant in variants:
+            raw_text, average_confidence, line_count, lines = self._run_paddle_ocr(variant.path)
+            attempt = build_ocr_attempt(
+                raw_text,
+                evidence_type,
+                preprocessing=variant.label,
+                average_confidence=average_confidence,
+                line_count=line_count,
+                lines=lines,
+            )
+            if attempt.raw_text:
+                attempts.append(attempt)
+
+        if not attempts:
+            raise ExtractionError("이미지에서 OCR 텍스트를 추출하지 못했습니다.")
+        return sorted(attempts, key=lambda attempt: attempt.score, reverse=True)
+
+    def _prepare_image_variants(
+        self,
+        file_path: Path,
+        temp_root: Path,
+        evidence_type: EvidenceType,
+    ) -> list[PreparedImageVariant]:
+        cv2, _, threshold_sauvola = self._load_ocr_dependencies()
+        image = self._load_cv_image(file_path, cv2)
+        variants: list[PreparedImageVariant] = []
+
+        def add_variant(label: str, variant_image: Any) -> Any:
+            target_path = temp_root / f"{label}.png"
+            cv2.imwrite(str(target_path), variant_image)
+            variants.append(PreparedImageVariant(label=label, path=target_path))
+            return variant_image
+
+        base = add_variant("original", image)
+        if evidence_type == EvidenceType.PHYSICAL_RECEIPT:
+            perspective = add_variant(
+                "perspective_corrected",
+                self._perspective_correct(base, cv2),
+            )
+            background_removed = add_variant(
+                "background_cropped",
+                self._remove_background(perspective, cv2),
+            )
+        else:
+            background_removed = base
+
+        enhanced = add_variant(
+            "document_enhanced",
+            self._enhance_document(background_removed, cv2, threshold_sauvola),
+        )
+        add_variant("adaptive_binary", self._adaptive_binarize(enhanced, cv2))
+        return variants
+
+    def _load_ocr_dependencies(self) -> tuple[Any, Any, Any]:
         try:
-            from pypdf import PdfReader
+            import cv2
+            import numpy as np
+            from skimage.filters import threshold_sauvola
         except ImportError as exc:
             raise ExtractionConfigurationError(
-                "PDF 텍스트 추출을 위해 `pypdf` 패키지가 필요합니다."
+                "OCR 전처리 의존성이 설치되지 않았습니다. "
+                "`opencv-python-headless`, `numpy`, `scikit-image`를 설치해 주세요."
+            ) from exc
+        return cv2, np, threshold_sauvola
+
+    def _get_paddle_ocr_engine(self) -> Any:
+        if self._paddle_ocr_engine is not None:
+            return self._paddle_ocr_engine
+
+        try:
+            from paddleocr import PaddleOCR
+        except ImportError as exc:
+            raise ExtractionConfigurationError(
+                "PaddleOCR 의존성이 설치되지 않았습니다. `paddleocr`를 설치해 주세요."
             ) from exc
 
-        reader = PdfReader(BytesIO(content))
-        return "\n".join((page.extract_text() or "").strip() for page in reader.pages).strip()
-
-    def _run_tesseract_ocr(self, file_path: Path, psm: int) -> str:
-        tesseract_cmd = self._resolve_tesseract_cmd()
-        tessdata_dir = self._resolve_tessdata_dir(tesseract_cmd)
-        self._ensure_requested_languages_available(tessdata_dir)
-
-        command = [
-            tesseract_cmd,
-            str(file_path),
-            "stdout",
-            "-l",
-            self._settings.ocr_languages,
+        os.environ.setdefault("DISABLE_MODEL_SOURCE_CHECK", "True")
+        os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+        candidate_kwargs = [
+            {
+                "use_doc_orientation_classify": False,
+                "use_doc_unwarping": False,
+                "use_textline_orientation": False,
+                "enable_mkldnn": False,
+                "text_detection_model_name": "PP-OCRv5_mobile_det",
+                "text_recognition_model_name": "korean_PP-OCRv5_mobile_rec",
+            },
+            {
+                "lang": self._settings.paddleocr_lang,
+                "use_doc_orientation_classify": False,
+                "use_doc_unwarping": False,
+                "use_textline_orientation": False,
+                "enable_mkldnn": False,
+            },
+            {
+                "lang": self._settings.paddleocr_lang,
+                "use_doc_orientation_classify": False,
+                "use_doc_unwarping": False,
+                "use_textline_orientation": False,
+            },
+            {"lang": self._settings.paddleocr_lang},
+            {},
         ]
-        if tessdata_dir is not None:
-            command.extend(["--tessdata-dir", str(tessdata_dir)])
-
-        command.extend(
-            [
-                "--oem",
-                "1",
-                "--psm",
-                str(psm),
-                "-c",
-                "preserve_interword_spaces=1",
-            ]
-        )
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            check=False,
-            text=True,
-            encoding="utf-8",
-            errors="ignore",
-        )
-        if completed.returncode != 0:
-            detail = completed.stderr.strip() or "알 수 없는 OCR 오류"
-            raise ExtractionError(f"Tesseract OCR 실행에 실패했습니다: {detail}")
-        return completed.stdout.strip()
-
-    def _resolve_tesseract_cmd(self) -> str:
-        configured = self._settings.tesseract_cmd.strip()
-        if configured and Path(configured).exists():
-            return configured
-
-        discovered = shutil.which("tesseract")
-        if discovered:
-            return discovered
-
-        raise ExtractionConfigurationError(
-            "Tesseract 실행 파일을 찾지 못했습니다. TESSERACT_CMD 설정을 확인해주세요."
-        )
-
-    def _resolve_tessdata_dir(self, tesseract_cmd: str) -> Path | None:
-        if self._resolved_tessdata_dir is not None:
-            return self._resolved_tessdata_dir
-
-        configured = self._settings.tessdata_dir
-        if configured.exists():
-            self._resolved_tessdata_dir = configured.resolve()
-            return self._resolved_tessdata_dir
-
-        system_tessdata_dir = Path(tesseract_cmd).resolve().parent / "tessdata"
-        if system_tessdata_dir.exists():
-            self._resolved_tessdata_dir = system_tessdata_dir
-            return self._resolved_tessdata_dir
-
-        self._resolved_tessdata_dir = None
-        return None
-
-    def _ensure_requested_languages_available(self, tessdata_dir: Path | None) -> None:
-        requested_languages = tuple(
-            language.strip()
-            for language in self._settings.ocr_languages.split("+")
-            if language.strip()
-        )
-        if not requested_languages:
-            raise ExtractionConfigurationError("OCR 언어 설정이 비어 있습니다.")
-        if self._validated_languages == requested_languages:
-            return
-
-        if tessdata_dir is None:
-            raise ExtractionConfigurationError("Tesseract tessdata 디렉터리를 찾지 못했습니다.")
-
-        missing_languages = [
-            language
-            for language in requested_languages
-            if not (tessdata_dir / f"{language}.traineddata").exists()
-        ]
-        if missing_languages:
-            available_languages = sorted(
-                traineddata_file.stem for traineddata_file in tessdata_dir.glob("*.traineddata")
-            )
+        last_error: Exception | None = None
+        for engine_kwargs in candidate_kwargs:
+            try:
+                self._paddle_ocr_engine = PaddleOCR(**engine_kwargs)
+                break
+            except (TypeError, ValueError) as exc:
+                last_error = exc
+        if self._paddle_ocr_engine is None:
             raise ExtractionConfigurationError(
-                "요청한 OCR 언어팩이 없습니다. "
-                f"requested={requested_languages}, missing={missing_languages}, "
-                f"available={available_languages}, tessdata_dir={tessdata_dir}"
-            )
+                f"PaddleOCR 초기화에 실패했습니다: {last_error}"
+            ) from last_error
+        return self._paddle_ocr_engine
 
-        self._validated_languages = requested_languages
+    def _run_paddle_ocr(self, file_path: Path) -> tuple[str, float, int, list[OCRLine]]:
+        engine = self._get_paddle_ocr_engine()
+        try:
+            if hasattr(engine, "predict"):
+                raw_result = list(engine.predict(str(file_path)))
+            else:
+                raw_result = engine.ocr(str(file_path))
+        except Exception as exc:
+            raise ExtractionError(f"PaddleOCR 실행에 실패했습니다: {exc}") from exc
+
+        lines = self._parse_paddle_output(raw_result)
+        filtered_lines = [
+            line for line in lines if line.confidence >= self._settings.ocr_min_line_confidence
+        ]
+        raw_text = "\n".join(line.text for line in filtered_lines)
+        average_confidence = (
+            sum(line.confidence for line in filtered_lines) / len(filtered_lines)
+            if filtered_lines
+            else 0.0
+        )
+        return (
+            normalize_extracted_text(raw_text),
+            round(average_confidence, 4),
+            len(filtered_lines),
+            filtered_lines,
+        )
+
+    def _parse_paddle_output(self, raw_result: Any) -> list[OCRLine]:
+        lines: list[OCRLine] = []
+        for item in self._iter_paddle_items(raw_result):
+            if isinstance(item, dict) and "rec_texts" in item:
+                texts = item.get("rec_texts") or []
+                scores = item.get("rec_scores") or []
+                boxes = item.get("rec_polys") or item.get("dt_polys") or []
+                for index, text in enumerate(texts):
+                    confidence = float(scores[index]) if index < len(scores) else 0.0
+                    box = self._normalize_box(boxes[index]) if index < len(boxes) else []
+                    y = min(point[1] for point in box) if box else 0.0
+                    x = min(point[0] for point in box) if box else 0.0
+                    lines.append(
+                        OCRLine(
+                            text=normalize_extracted_text(str(text)),
+                            confidence=confidence,
+                            box=box,
+                            y=y,
+                            x=x,
+                        )
+                    )
+                continue
+            box, text, confidence = self._unpack_paddle_item(item)
+            if not text:
+                continue
+            y = min(point[1] for point in box) if box else 0.0
+            x = min(point[0] for point in box) if box else 0.0
+            lines.append(
+                OCRLine(
+                    text=normalize_extracted_text(text),
+                    confidence=confidence,
+                    box=box,
+                    y=y,
+                    x=x,
+                )
+            )
+        return sorted(lines, key=lambda line: (line.y, line.x))
+
+    def _iter_paddle_items(self, raw_result: Any) -> list[Any]:
+        if raw_result is None:
+            return []
+        if isinstance(raw_result, list):
+            items: list[Any] = []
+            for page in raw_result:
+                if isinstance(page, list):
+                    items.extend(page)
+                elif page:
+                    items.append(page)
+            return items
+        return [raw_result]
+
+    def _unpack_paddle_item(self, item: Any) -> tuple[list[list[float]], str, float]:
+        if isinstance(item, dict):
+            box = item.get("bbox") or item.get("box") or []
+            text = str(item.get("text") or "").strip()
+            confidence = float(item.get("score") or item.get("confidence") or 0.0)
+            return self._normalize_box(box), text, confidence
+
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            box = self._normalize_box(item[0])
+            content = item[1]
+            if isinstance(content, (list, tuple)) and len(content) >= 2:
+                return box, str(content[0]).strip(), float(content[1])
+            if isinstance(content, str):
+                confidence = float(item[2]) if len(item) > 2 else 0.0
+                return box, content.strip(), confidence
+
+        return [], str(item).strip(), 0.0
+
+    def _normalize_box(self, raw_box: Any) -> list[list[float]]:
+        if not isinstance(raw_box, (list, tuple)):
+            return []
+        box: list[list[float]] = []
+        for point in raw_box:
+            if isinstance(point, (list, tuple)) and len(point) >= 2:
+                box.append([float(point[0]), float(point[1])])
+        return box
+
+    def _load_cv_image(self, file_path: Path, cv2: Any) -> Any:
+        import numpy as np
+
+        image_bytes = file_path.read_bytes()
+        matrix = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if matrix is None:
+            raise ExtractionError("이미지 파일을 열 수 없습니다.")
+        return self._resize_cv_image(matrix, cv2)
+
+    def _resize_cv_image(self, image: Any, cv2: Any) -> Any:
+        height, width = image.shape[:2]
+        max_dimension = 2200
+        longest_edge = max(height, width)
+        if longest_edge <= max_dimension:
+            return image
+        scale = max_dimension / float(longest_edge)
+        return cv2.resize(
+            image,
+            (max(1, int(width * scale)), max(1, int(height * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    def _perspective_correct(self, image: Any, cv2: Any) -> Any:
+        import numpy as np
+
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edged = cv2.Canny(blurred, 50, 150)
+        contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+
+        document_contour = None
+        for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:10]:
+            perimeter = cv2.arcLength(contour, True)
+            approximation = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
+            if len(approximation) == 4:
+                document_contour = approximation.reshape(4, 2)
+                break
+
+        if document_contour is None:
+            return image
+
+        ordered = _order_points(document_contour)
+        top_left, top_right, bottom_right, bottom_left = ordered
+        width_top = _distance(top_left, top_right)
+        width_bottom = _distance(bottom_left, bottom_right)
+        height_left = _distance(top_left, bottom_left)
+        height_right = _distance(top_right, bottom_right)
+        target_width = int(max(width_top, width_bottom))
+        target_height = int(max(height_left, height_right))
+        if target_width < 50 or target_height < 50:
+            return image
+
+        destination = [
+            [0.0, 0.0],
+            [float(target_width - 1), 0.0],
+            [float(target_width - 1), float(target_height - 1)],
+            [0.0, float(target_height - 1)],
+        ]
+        matrix = cv2.getPerspectiveTransform(
+            np.float32(ordered),
+            np.float32(destination),
+        )
+        return cv2.warpPerspective(image, matrix, (target_width, target_height))
+
+    def _remove_background(self, image: Any, cv2: Any) -> Any:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        _, thresholded = cv2.threshold(
+            blurred,
+            0,
+            255,
+            cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+        )
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+        closed = cv2.morphologyEx(thresholded, cv2.MORPH_CLOSE, kernel, iterations=2)
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return image
+
+        contour = max(contours, key=cv2.contourArea)
+        x, y, width, height = cv2.boundingRect(contour)
+        if width < image.shape[1] * 0.35 or height < image.shape[0] * 0.35:
+            return image
+
+        padding = 12
+        x0 = max(x - padding, 0)
+        y0 = max(y - padding, 0)
+        x1 = min(x + width + padding, image.shape[1])
+        y1 = min(y + height + padding, image.shape[0])
+        return image[y0:y1, x0:x1]
+
+    def _enhance_document(self, image: Any, cv2: Any, threshold_sauvola: Any) -> Any:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        contrasted = clahe.apply(gray)
+        denoised = cv2.bilateralFilter(contrasted, 9, 35, 35)
+
+        sauvola_threshold = threshold_sauvola(denoised, window_size=31, k=0.12)
+        mask = denoised > sauvola_threshold
+        enhanced = denoised.copy()
+        enhanced[mask] = 255
+        enhanced[~mask] = (enhanced[~mask] * 0.82).clip(0, 255).astype("uint8")
+        return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+
+    def _adaptive_binarize(self, image: Any, cv2: Any) -> Any:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        adaptive = cv2.adaptiveThreshold(
+            gray,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            31,
+            9,
+        )
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        cleaned = cv2.morphologyEx(adaptive, cv2.MORPH_OPEN, kernel, iterations=1)
+        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel, iterations=1)
+        return cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+
+    def _build_field_fusion_payload(self, attempts: list[OCRAttempt]) -> dict[str, Any]:
+        payload: dict[str, Any] = {"normalized_fields": {}, "sources": {}}
+        for field_name in ("date", "merchant", "amount", "payment"):
+            choice = _select_field_choice(
+                attempts,
+                lambda attempt, name=field_name: _field_value(attempt, name),
+                lambda attempt, name=field_name: _field_score(attempt, name),
+            )
+            if choice is None:
+                payload["normalized_fields"][field_name] = None
+                continue
+            payload["normalized_fields"][field_name] = _serialize_field_value(
+                field_name,
+                choice.value,
+            )
+            payload["sources"][field_name] = {
+                "preprocessing": choice.attempt.preprocessing,
+                "score": round(choice.score, 4),
+                "average_confidence": round(choice.attempt.average_confidence, 4),
+            }
+        return payload
 
     def _serialize_ocr_attempt(self, attempt: OCRAttempt) -> dict[str, Any]:
         return {
             "preprocessing": attempt.preprocessing,
-            "psm": attempt.psm,
-            "score": attempt.score,
-            "confidence": attempt.parsed.confidence,
+            "score": round(attempt.score, 4),
+            "average_confidence": round(attempt.average_confidence, 4),
+            "line_count": attempt.line_count,
             "normalized_fields": _serialize_parsed_fields(attempt.parsed),
-            "text_preview": attempt.raw_text[:240],
         }
 
 
-def _extract_date(lines: list[str]) -> date | None:
-    candidates: list[tuple[int, date]] = []
-    for index, window_size, segment in _iter_line_windows(lines, max_window_size=3):
-        lowered = segment.lower()
-        keyword_bonus = 5 if any(keyword in lowered for keyword in DATE_KEYWORDS) else 0
-        for pattern in DATE_PATTERNS:
-            for match in pattern.finditer(segment):
-                parsed = _safe_build_date(
-                    year=match.group("year"),
-                    month=match.group("month"),
-                    day=match.group("day"),
-                )
-                if parsed is None:
-                    continue
-                window_bonus = 2 if window_size > 1 else 0
-                candidates.append((keyword_bonus + window_bonus + max(0, 10 - index), parsed))
-
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    return candidates[0][1]
-
-
-def _extract_amount(lines: list[str]) -> Decimal | None:
-    candidates: list[tuple[int, Decimal]] = []
-    for index, window_size, segment in _iter_line_windows(lines, max_window_size=2):
-        lowered = segment.lower()
-        if any(keyword in lowered for keyword in ("사업자", "전화", "tel", "카드번호")):
+def _select_field_choice(
+    attempts: list[OCRAttempt],
+    value_getter: Any,
+    score_getter: Any,
+) -> _FieldChoice | None:
+    best_choice: _FieldChoice | None = None
+    for attempt in attempts:
+        value = value_getter(attempt)
+        if value in (None, ""):
             continue
-
-        has_amount_keywords = any(keyword in lowered for keyword in AMOUNT_KEYWORDS)
-        keyword_score = sum(
-            score for keyword, score in AMOUNT_KEYWORDS.items() if keyword in lowered
-        )
-        currency_bonus = 5 if any(currency in lowered for currency in CURRENCY_HINTS) else 0
-        if any(
-            keyword in lowered for keyword in ("가맹점", "상호", "merchant", "store", "판매처")
-        ) and not (has_amount_keywords or currency_bonus):
-            continue
-        has_date = any(pattern.search(segment) for pattern in DATE_PATTERNS)
-        if has_date and not (has_amount_keywords or currency_bonus):
-            continue
-        loose_numbers = _find_loose_amount_numbers(
-            segment,
-            allow_short_groups=bool(has_amount_keywords or currency_bonus),
-        )
-        standard_numbers = [match.group(1) for match in AMOUNT_PATTERN.finditer(segment)]
-        number_strings = loose_numbers or standard_numbers
-        number_strings = _dedupe_preserving_order(number_strings)
-        if len(number_strings) > 1 and not (has_amount_keywords or currency_bonus):
-            continue
-
-        for raw_number in number_strings:
-            amount = _to_decimal(raw_number)
-            if amount is None or amount < Decimal("100"):
-                continue
-            digit_count = len(raw_number.replace(",", ""))
-            if digit_count >= 6 and not (has_amount_keywords or currency_bonus):
-                continue
-            if Decimal("2000") <= amount <= Decimal("2100") and not (
-                has_amount_keywords or currency_bonus
-            ):
-                continue
-            candidate_score = keyword_score + currency_bonus
-            if amount % Decimal("1000") == 0:
-                candidate_score += 3
-            elif amount % Decimal("100") == 0:
-                candidate_score += 1
-
-            if any(keyword in lowered for keyword in AMOUNT_CONTEXT_REJECTION_KEYWORDS):
-                continue
-
-            window_bonus = 2 if window_size > 1 else 0
-            candidates.append(
-                (
-                    candidate_score + window_bonus + max(0, 10 - index),
-                    amount,
-                )
-            )
-
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return candidates[0][1]
+        score = score_getter(attempt)
+        if best_choice is None or score > best_choice.score:
+            best_choice = _FieldChoice(value=value, score=score, attempt=attempt)
+    return best_choice
 
 
-def _extract_merchant_name(lines: list[str]) -> str | None:
-    candidates: list[tuple[int, str]] = []
-    candidates.extend(_extract_merchant_name_from_labels(lines))
-    for index, window_size, segment in _iter_line_windows(lines, max_window_size=2, limit=12):
-        candidate = _sanitize_merchant_candidate(segment)
-        if candidate is None:
-            continue
-        candidates.append((_score_merchant_candidate(candidate, index, window_size), candidate))
-
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    return candidates[0][1]
-
-
-def _extract_merchant_name_from_labels(lines: list[str]) -> list[tuple[int, str]]:
-    candidates: list[tuple[int, str]] = []
-    for index, line in enumerate(lines):
-        for pattern in MERCHANT_PATTERNS:
-            match = re.search(pattern, line, flags=re.IGNORECASE)
-            if match:
-                candidate = _sanitize_merchant_candidate(match.group(1))
-                if candidate is None:
-                    candidate = _sanitize_labeled_merchant_candidate(match.group(1))
-                if candidate is not None:
-                    score = _score_merchant_candidate(candidate, index, window_size=1) + 24
-                    candidates.append((score, candidate))
-    return candidates
+def _field_value(attempt: OCRAttempt, field_name: str) -> Any:
+    match field_name:
+        case "date":
+            return attempt.parsed.evidence_date
+        case "merchant":
+            return attempt.parsed.merchant_name
+        case "amount":
+            return attempt.parsed.amount
+        case "payment":
+            return attempt.parsed.payment_method
+        case _:
+            return None
 
 
-def _sanitize_merchant_candidate(line: str) -> str | None:
-    candidate = line.strip(" :-")
-    candidate = re.sub(r"^[^A-Za-z가-힣(]+", "", candidate)
-    candidate = re.sub(r"^(영수증|매출전표|영수증번호)\s*", "", candidate, flags=re.IGNORECASE)
-    candidate = re.sub(r"^\[[^\]]+\]\s*[_-]*\s*", "", candidate)
-    candidate = re.sub(r"^#+\s*", "", candidate)
-    candidate = re.sub(r"^[\]\[(){}<>|]+\s*", "", candidate)
-    candidate = re.sub(r"\s*\(\s*[0-9OIlSB ]{1,8}\s*\)\s*$", "", candidate)
-    candidate = re.sub(r"([가-힣)])\d{1,3}:\d{2}(?::\d{2})?(?:\s+\d{2,4})*$", r"\1", candidate)
-    candidate = re.sub(r"\s+\d{1,3}:\d{2}(?::\d{2})?(?:\s+\d{2,4})*$", "", candidate)
-    candidate = re.sub(r"\s+\d{2,4}(?:[-:]\d{2,4}){1,}.*$", "", candidate)
-    candidate = re.sub(r"\s+\d{3,}(?:\s+\d{2,}){1,}.*$", "", candidate)
-    candidate = _apply_merchant_fixups(candidate)
-    candidate = candidate.strip(" :-")
-    lowered = candidate.lower()
-    if len(candidate) < 2:
-        return None
-    if candidate.endswith("는") and len(candidate) <= 6:
-        return None
-    if any(keyword in lowered for keyword in MERCHANT_STOPWORDS):
-        return None
-    if any(currency in lowered for currency in CURRENCY_HINTS):
-        return None
-    if any(pattern.search(candidate) for pattern in DATE_PATTERNS):
-        return None
-    if re.search(r"\d{2,}-\d{2,}", candidate):
-        return None
-    if not re.search(r"[A-Za-z가-힣]", candidate):
-        return None
-
-    has_merchant_hint = any(keyword in candidate for keyword in MERCHANT_BOOST_KEYWORDS)
-    for number_match in AMOUNT_PATTERN.finditer(candidate):
-        next_character = candidate[number_match.end() : number_match.end() + 1]
-        previous_character = candidate[number_match.start() - 1 : number_match.start()]
-        attached_to_word = bool(
-            re.match(r"[A-Za-z가-힣]", next_character)
-            or re.match(r"[A-Za-z가-힣]", previous_character)
-        )
-        if attached_to_word and has_merchant_hint:
-            continue
-        return None
-
-    return candidate
-
-
-def _score_merchant_candidate(candidate: str, index: int, window_size: int) -> int:
-    score = max(0, 20 - index)
-    if window_size > 1:
-        score += 4
-    if any(token in candidate for token in MERCHANT_BOOST_KEYWORDS):
-        score += 6
-    if any(token in candidate for token in ("공사", "영업소", "학생회관", "학생식당")):
-        score += 5
-    score += min(len(re.findall(r"[A-Za-z가-힣]", candidate)), 16) // 2
-    if any(character in candidate for character in "<>[]{}|"):
-        score -= 8
-    if "하이패스는" in candidate or "빠르고 편리합니다" in candidate:
-        score -= 20
-    return score
-
-
-def _sanitize_labeled_merchant_candidate(value: str) -> str | None:
-    candidate = value.strip(" :-")
-    candidate = re.sub(r"([가-힣)])\d{1,3}:\d{2}(?::\d{2})?(?:\s+\d{2,4})*$", r"\1", candidate)
-    candidate = re.sub(r"\s+\d{1,3}:\d{2}(?::\d{2})?(?:\s+\d{2,4})*$", "", candidate)
-    candidate = re.sub(r"\s+\d{2,4}(?:[-:]\d{2,4}){1,}.*$", "", candidate)
-    candidate = re.sub(r"\s+\d{3,}(?:\s+\d{2,}){1,}.*$", "", candidate)
-    candidate = _apply_merchant_fixups(candidate).strip(" :-")
-    if candidate.startswith("주)"):
-        candidate = f"(주){candidate[2:]}"
-    if len(candidate) < 2:
-        return None
-    if not re.search(r"[A-Za-z가-힣]", candidate):
-        return None
-    return candidate
-
-
-def _extract_payment_method(text: str, evidence_type: EvidenceType) -> PaymentMethod | None:
-    lowered = text.lower()
-    if any(keyword in lowered for keyword in ("계좌이체", "이체", "출금계좌")):
-        return PaymentMethod.BANK_TRANSFER
-    if any(
-        keyword in lowered for keyword in ("네이버페이", "카카오페이", "토스페이", "온라인", "pay")
-    ):
-        return PaymentMethod.ONLINE_PAYMENT
-    if any(keyword in lowered for keyword in ("카드", "승인번호", "카드번호")):
-        return PaymentMethod.CARD
-    if evidence_type is EvidenceType.BANK_TRANSFER_STATEMENT:
-        return PaymentMethod.BANK_TRANSFER
-    if evidence_type is EvidenceType.E_RECEIPT:
-        return PaymentMethod.ONLINE_PAYMENT
-    if evidence_type is EvidenceType.PHYSICAL_RECEIPT:
-        return PaymentMethod.CARD
-    return None
+def _field_score(attempt: OCRAttempt, field_name: str) -> float:
+    base = attempt.score + (attempt.average_confidence * 10)
+    if field_name == "merchant":
+        bonus = 6 if attempt.preprocessing in {"perspective_corrected", "background_cropped"} else 0
+        return base + bonus
+    if field_name == "amount":
+        return base + (6 if attempt.preprocessing == "adaptive_binary" else 0)
+    if field_name == "date":
+        return base + (3 if attempt.preprocessing == "document_enhanced" else 0)
+    return base
 
 
 def _score_ocr_attempt(
-    raw_text: str,
+    normalized_text: str,
     parsed: ParsedEvidenceFields,
     evidence_type: EvidenceType,
+    *,
     preprocessing: str,
-    psm: int,
+    average_confidence: float,
+    line_count: int,
 ) -> float:
-    score = parsed.confidence * 100
-    lowered = raw_text.lower()
-    line_count = len([line for line in raw_text.splitlines() if line.strip()])
+    score = 0.0
+    score += 18 if parsed.evidence_date else 0
+    score += 30 if parsed.merchant_name else 0
+    score += 32 if parsed.amount is not None else 0
+    score += 12 if parsed.payment_method else 0
+    score += average_confidence * 15
     score += min(line_count, 12)
-    score += min(len(raw_text) / 24, 12)
-
-    if parsed.amount is not None:
-        score += 18
-    if parsed.evidence_date is not None:
-        score += 12
-    if parsed.merchant_name is not None:
-        score += 16
-    if parsed.payment_method is not None:
-        score += 8
-    if any(currency in lowered for currency in CURRENCY_HINTS):
-        score += 6
-
-    if evidence_type is EvidenceType.PHYSICAL_RECEIPT:
-        if any(keyword in lowered for keyword in RECEIPT_HINT_KEYWORDS):
-            score += 12
-        if preprocessing != "original":
-            score += 2
-        if psm in {4, 6}:
-            score += 2
-    elif evidence_type is EvidenceType.BANK_TRANSFER_STATEMENT:
-        if any(keyword in lowered for keyword in TRANSFER_HINT_KEYWORDS):
-            score += 10
-    elif evidence_type is EvidenceType.E_RECEIPT:
-        if any(keyword in lowered for keyword in ONLINE_HINT_KEYWORDS):
-            score += 10
-
-    return round(score, 2)
+    score += min(len(normalized_text), 600) / 60
+    if evidence_type == EvidenceType.PHYSICAL_RECEIPT and preprocessing == "adaptive_binary":
+        score += 4
+    if evidence_type == EvidenceType.PHYSICAL_RECEIPT and preprocessing == "background_cropped":
+        score += 3
+    return round(score, 4)
 
 
-def _serialize_parsed_fields(parsed: ParsedEvidenceFields) -> dict[str, str | None]:
-    return {
-        "evidence_date": parsed.evidence_date.isoformat() if parsed.evidence_date else None,
-        "merchant_name": parsed.merchant_name,
-        "amount": str(parsed.amount) if parsed.amount is not None else None,
-        "payment_method": parsed.payment_method.value if parsed.payment_method else None,
-    }
+def _build_receipt_lines(
+    normalized_text: str,
+    ocr_lines: list[OCRLine] | None,
+) -> list[OCRLine]:
+    if ocr_lines:
+        prepared: list[OCRLine] = []
+        for index, line in enumerate(ocr_lines):
+            text = normalize_extracted_text(line.text)
+            if not text:
+                continue
+            if line.box:
+                box = [[float(point[0]), float(point[1])] for point in line.box]
+                x = min(point[0] for point in box)
+                y = min(point[1] for point in box)
+            else:
+                y = float(index * 20)
+                box = _make_box(0.0, y, max(float(len(text) * 10), 40.0), y + 12.0)
+                x = 0.0
+            prepared.append(
+                OCRLine(
+                    text=text,
+                    confidence=line.confidence,
+                    box=box,
+                    y=y,
+                    x=x,
+                )
+            )
+        return _merge_receipt_lines(prepared)
+    return _build_synthetic_lines(normalized_text)
 
 
-def _safe_build_date(*, year: str, month: str, day: str) -> date | None:
-    try:
-        year_value = int(year)
-        if year_value < 100:
-            year_value += 2000
-        current_year = date.today().year
-        if year_value < 2000 or year_value > current_year + 1:
-            return None
-        return date(year_value, int(month), int(day))
-    except ValueError:
+def _build_synthetic_lines(normalized_text: str) -> list[OCRLine]:
+    lines: list[OCRLine] = []
+    for index, line in enumerate(part for part in normalized_text.splitlines() if part):
+        y = float(index * 20)
+        lines.append(
+            OCRLine(
+                text=line,
+                confidence=1.0,
+                box=_make_box(0.0, y, max(float(len(line) * 10), 40.0), y + 12.0),
+                y=y,
+                x=0.0,
+            )
+        )
+    return lines
+
+
+def _merge_receipt_lines(lines: list[OCRLine]) -> list[OCRLine]:
+    if not lines:
+        return []
+    ordered = sorted(lines, key=lambda line: (_line_top(line), _line_left(line)))
+    heights = [_line_height(line) for line in ordered if _line_height(line) > 0]
+    row_threshold = max(12.0, (median(heights) if heights else 18.0) * 0.7)
+
+    merged: list[OCRLine] = []
+    current_group: list[OCRLine] = [ordered[0]]
+    for line in ordered[1:]:
+        current_center = sum(_line_center_y(item) for item in current_group) / len(current_group)
+        if abs(_line_center_y(line) - current_center) <= row_threshold:
+            current_group.append(line)
+            continue
+        merged.append(_merge_line_group(current_group))
+        current_group = [line]
+    merged.append(_merge_line_group(current_group))
+    return merged
+
+
+def _merge_line_group(group: list[OCRLine]) -> OCRLine:
+    ordered = sorted(group, key=_line_left)
+    text = normalize_extracted_text(" ".join(line.text for line in ordered if line.text))
+    left = min(_line_left(line) for line in ordered)
+    top = min(_line_top(line) for line in ordered)
+    right = max(_line_right(line) for line in ordered)
+    bottom = max(_line_bottom(line) for line in ordered)
+    average_confidence = sum(line.confidence for line in ordered) / len(ordered)
+    return OCRLine(
+        text=text,
+        confidence=average_confidence,
+        box=_make_box(left, top, right, bottom),
+        y=top,
+        x=left,
+    )
+
+
+def _extract_date_from_layout(lines: list[OCRLine]) -> date | None:
+    if not lines:
         return None
 
+    today = date.today()
+    page_height = _page_height(lines)
+    best_match: tuple[float, date] | None = None
 
-def _to_decimal(raw_number: str) -> Decimal | None:
+    for index, line in enumerate(lines):
+        contexts = [line.text]
+        if index + 1 < len(lines) and _vertical_gap(line, lines[index + 1]) <= 28:
+            contexts.append(f"{line.text} {lines[index + 1].text}")
+
+        for context_text in contexts:
+            lowered = context_text.lower()
+            keyword_bonus = 22 if any(keyword in lowered for keyword in DATE_KEYWORDS) else 0
+            for pattern in DATE_PATTERNS:
+                for match in pattern.finditer(context_text):
+                    year = int(match.group("year"))
+                    if year < 100:
+                        year += 2000
+                    month = int(match.group("month"))
+                    day = int(match.group("day"))
+                    try:
+                        parsed_date = date(year, month, day)
+                    except ValueError:
+                        continue
+
+                    score = 50 + keyword_bonus - (index * 0.8)
+                    if _normalized_y(line, page_height) <= 0.35:
+                        score += 6
+                    score -= abs(parsed_date.year - today.year) * 4
+                    if parsed_date.year > today.year + 1 or parsed_date.year < today.year - 4:
+                        score -= 12
+                    if best_match is None or score > best_match[0]:
+                        best_match = (score, parsed_date)
+
+    return best_match[1] if best_match else None
+
+
+def _extract_payment_method_from_layout(
+    lines: list[OCRLine],
+    evidence_type: EvidenceType,
+) -> PaymentMethod | None:
+    text = "\n".join(line.text for line in lines).lower()
+    if any(keyword in text for keyword in ONLINE_PAYMENT_KEYWORDS):
+        return PaymentMethod.ONLINE_PAYMENT
+    if evidence_type == EvidenceType.BANK_TRANSFER_STATEMENT or any(
+        keyword in text for keyword in BANK_TRANSFER_KEYWORDS
+    ):
+        return PaymentMethod.BANK_TRANSFER
+    if any(keyword in text for keyword in CASH_KEYWORDS):
+        return PaymentMethod.CASH
+    if any(keyword in text for keyword in CARD_KEYWORDS):
+        return PaymentMethod.CARD
+    if evidence_type == EvidenceType.E_RECEIPT:
+        return PaymentMethod.ONLINE_PAYMENT
+    return None
+
+
+def _extract_amount_from_layout(
+    lines: list[OCRLine],
+    evidence_type: EvidenceType,
+    *,
+    payment_method: PaymentMethod | None = None,
+) -> Decimal | None:
+    del evidence_type
+    if not lines:
+        return None
+
+    payment_method = payment_method or _extract_payment_method_from_layout(
+        lines,
+        EvidenceType.PHYSICAL_RECEIPT,
+    )
+    page_height = _page_height(lines)
+    derived_cash_total = _derive_cash_total_from_layout(lines)
+    candidates: list[_AmountCandidate] = []
+    line_item_hints = (
+        "수량",
+        "단가",
+        "qty",
+        "item",
+        "ea",
+        "공급가액",
+        "부가세",
+        "과세",
+        "면세",
+        "봉사료",
+        "할인",
+        "메뉴",
+    )
+
+    for index, line in enumerate(lines):
+        line_text = line.text
+        line_lower = line_text.lower()
+        previous_lower = lines[index - 1].text.lower() if index > 0 else ""
+        next_lower = lines[index + 1].text.lower() if index + 1 < len(lines) else ""
+        context_lower = " ".join(part for part in (previous_lower, line_lower, next_lower) if part)
+        current_values = list(_iter_amount_values(line_text))
+        line_has_total_hint = any(hint in line_lower for hint in TOTAL_HINTS)
+        adjacent_total_hint = any(hint in previous_lower for hint in TOTAL_HINTS) or any(
+            hint in next_lower for hint in TOTAL_HINTS
+        )
+        context_has_total_hint = line_has_total_hint or adjacent_total_hint
+
+        if current_values and not _should_reject_amount_context(line_text, context_has_total_hint):
+            for number_text, value in current_values:
+                digits = re.sub(r"\D", "", number_text)
+                if len(digits) >= 9:
+                    continue
+
+                score = 12.0
+                if line_has_total_hint:
+                    score += 62
+                elif adjacent_total_hint:
+                    score += 38
+                if any(word in context_lower for word in ("결제", "승인", "합계", "total", "paid")):
+                    score += 10
+                if any(word in context_lower for word in ("원", "krw", "won")):
+                    score += 6
+                if value >= Decimal("1000"):
+                    score += 8
+                if value >= Decimal("10000"):
+                    score += 4
+                if _normalized_y(line, page_height) >= 0.45:
+                    score += 10
+                if index >= max(len(lines) - 5, 0):
+                    score += 4
+                if len(current_values) == 1 and line_has_total_hint:
+                    score += 10
+                if any(word in line_lower for word in line_item_hints) and not line_has_total_hint:
+                    score -= 30
+                if len(current_values) >= 3 and not line_has_total_hint:
+                    score -= 22
+                if len(digits) >= 7 and not context_has_total_hint:
+                    score -= 32
+                if (
+                    any(keyword in context_lower for keyword in AMOUNT_REJECTION_KEYWORDS)
+                    and not context_has_total_hint
+                ):
+                    score -= 55
+                if payment_method == PaymentMethod.CASH and any(
+                    word in line_lower for word in ("받을금액", "거스름돈")
+                ):
+                    score -= 18
+                if _normalized_y(line, page_height) <= 0.22 and not context_has_total_hint:
+                    score -= 12
+
+                candidates.append(
+                    _AmountCandidate(
+                        value=value,
+                        score=score,
+                        line_index=index,
+                        line=line_text,
+                        has_total_hint=context_has_total_hint,
+                    )
+                )
+
+        if not line_has_total_hint or current_values:
+            continue
+
+        for offset in (1, 2):
+            if index + offset >= len(lines):
+                break
+            nearby_line = lines[index + offset]
+            if _vertical_gap(line, nearby_line) > 28:
+                break
+            if _should_reject_amount_context(nearby_line.text, True):
+                continue
+
+            for number_text, value in _iter_amount_values(nearby_line.text):
+                digits = re.sub(r"\D", "", number_text)
+                if len(digits) >= 9:
+                    continue
+                score = 74 - (offset * 6)
+                if _normalized_y(nearby_line, page_height) >= 0.45:
+                    score += 10
+                if value >= Decimal("1000"):
+                    score += 8
+                candidates.append(
+                    _AmountCandidate(
+                        value=value,
+                        score=score,
+                        line_index=index + offset,
+                        line=f"{line.text} -> {nearby_line.text}",
+                        has_total_hint=True,
+                    )
+                )
+
+    if derived_cash_total is not None:
+        candidates.append(
+            _AmountCandidate(
+                value=derived_cash_total,
+                score=88,
+                line_index=len(lines),
+                line="cash_difference",
+                has_total_hint=True,
+            )
+        )
+
+    if not candidates:
+        return None
+
+    value_counts = Counter(candidate.value for candidate in candidates)
+    return max(
+        candidates,
+        key=lambda candidate: (
+            candidate.has_total_hint,
+            round(candidate.score + min((value_counts[candidate.value] - 1) * 12, 24), 4),
+            value_counts[candidate.value],
+            candidate.value,
+        ),
+    ).value
+
+
+def _extract_merchant_from_layout(lines: list[OCRLine], evidence_type: EvidenceType) -> str | None:
+    if not lines:
+        return None
+
+    if evidence_type == EvidenceType.BANK_TRANSFER_STATEMENT:
+        merchant = _extract_labelled_value_from_layout(lines, ("받는분", "받는분명", "받는 사람"))
+        if merchant:
+            return merchant
+    if evidence_type == EvidenceType.E_RECEIPT:
+        merchant = _extract_labelled_value_from_layout(
+            lines,
+            ("판매처", "가맹점명", "가맹점", "merchant", "store"),
+        )
+        if merchant:
+            return merchant
+
+    labelled = _extract_labelled_value_from_layout(lines, MERCHANT_LABELS)
+    if labelled:
+        return labelled
+
+    page_height = _page_height(lines)
+    page_width = _page_width(lines)
+    structural_index = _find_first_structural_line_index(lines)
+    search_limit = min(
+        len(lines),
+        max(6, (structural_index + 2) if structural_index is not None else 8),
+    )
+    candidates: list[tuple[float, int, int, str]] = []
+
+    for index, line in enumerate(lines[:search_limit]):
+        raw_line = line.text
+        candidate = _clean_merchant_candidate(raw_line)
+        if not candidate:
+            continue
+
+        lowered = candidate.lower()
+        score = 38.0 - (index * 2.5)
+        if _normalized_y(line, page_height) <= 0.18:
+            score += 14
+        elif _normalized_y(line, page_height) <= 0.32:
+            score += 8
+        if structural_index is not None and index < structural_index:
+            score += 12
+        if structural_index is not None and index + 1 == structural_index:
+            score += 8
+        if _contains_korean(candidate):
+            score += 14
+        score += _alpha_ratio(candidate) * 10
+        if len(candidate) >= 5:
+            score += 6
+        width_ratio = (_line_width(line) / page_width) if page_width else 0.0
+        if 0.2 <= width_ratio <= 0.92:
+            score += 5
+        if len(candidate) <= 3:
+            score -= 24
+        if _looks_like_address(candidate):
+            score -= 40
+        if BUSINESS_NUMBER_PATTERN.search(candidate) or PHONE_PATTERN.search(candidate):
+            score -= 45
+        if any(
+            keyword in raw_line.lower()
+            for keyword in (
+                DATE_KEYWORDS
+                + TOTAL_HINTS
+                + CARD_KEYWORDS
+                + CASH_KEYWORDS
+                + ONLINE_PAYMENT_KEYWORDS
+            )
+        ):
+            score -= 34
+        if any(keyword in lowered for keyword in MERCHANT_NOISE_KEYWORDS):
+            score -= 28
+        if _is_ascii_only(candidate):
+            score -= 18
+        if index + 1 < search_limit:
+            next_candidate = _clean_merchant_candidate(lines[index + 1].text)
+            if (
+                next_candidate
+                and _contains_korean(next_candidate)
+                and not _contains_korean(candidate)
+                and len(candidate) <= 10
+            ):
+                score -= 18
+        if index + 1 < len(lines):
+            next_text = lines[index + 1].text
+            if BUSINESS_NUMBER_PATTERN.search(next_text) or PHONE_PATTERN.search(next_text):
+                score += 14
+
+        if score > 0:
+            candidates.append((round(score, 4), len(candidate), -index, candidate))
+
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    return candidates[0][3]
+
+
+def _extract_labelled_value_from_layout(
+    lines: list[OCRLine],
+    labels: tuple[str, ...],
+) -> str | None:
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    pattern = re.compile(rf"^\s*(?:{label_pattern})\s*[:：]?\s*(.*)$", flags=re.IGNORECASE)
+    for index, line in enumerate(lines[:10]):
+        match = pattern.match(line.text)
+        if match is None:
+            continue
+        candidate = _clean_merchant_candidate(match.group(1))
+        if candidate:
+            return candidate
+        if index + 1 < len(lines):
+            fallback = _clean_merchant_candidate(lines[index + 1].text)
+            if fallback:
+                return fallback
+    return None
+
+
+def _derive_cash_total_from_layout(lines: list[OCRLine]) -> Decimal | None:
+    received: Decimal | None = None
+    change: Decimal | None = None
+    total: Decimal | None = None
+    for line in lines:
+        lowered = line.text.lower()
+        values = [value for _, value in _iter_amount_values(line.text)]
+        if not values:
+            continue
+        if "받을금액" in lowered:
+            received = max(values)
+        elif "거스름돈" in lowered:
+            change = max(values)
+        elif any(hint in lowered for hint in TOTAL_HINTS):
+            total = max(values)
+    if total is not None:
+        return total
+    if received is not None and change is not None:
+        difference = received - change
+        if difference > 0:
+            return difference
+    return None
+
+
+def _iter_amount_values(text: str) -> list[tuple[str, Decimal]]:
+    values: list[tuple[str, Decimal]] = []
+    for match in AMOUNT_PATTERN.finditer(text):
+        number_text = match.group(1)
+        value = _parse_decimal_value(number_text)
+        if value is None or value <= 0:
+            continue
+        values.append((number_text, value))
+    return values
+
+
+def _should_reject_amount_context(text: str, has_total_hint: bool) -> bool:
+    if has_total_hint:
+        return False
+    lowered = text.lower()
+    if BUSINESS_NUMBER_PATTERN.search(text) or PHONE_PATTERN.search(text):
+        return True
+    return any(keyword in lowered for keyword in AMOUNT_REJECTION_KEYWORDS)
+
+
+def _find_first_structural_line_index(lines: list[OCRLine]) -> int | None:
+    for index, line in enumerate(lines[:10]):
+        text = line.text
+        lowered = text.lower()
+        if BUSINESS_NUMBER_PATTERN.search(text) or PHONE_PATTERN.search(text):
+            return index
+        if any(
+            keyword in lowered
+            for keyword in (
+                DATE_KEYWORDS
+                + TOTAL_HINTS
+                + CARD_KEYWORDS
+                + CASH_KEYWORDS
+                + ONLINE_PAYMENT_KEYWORDS
+            )
+        ):
+            return index
+        if index > 0 and _looks_like_address(text):
+            return index
+    return None
+
+
+def _make_box(left: float, top: float, right: float, bottom: float) -> list[list[float]]:
+    return [[left, top], [right, top], [right, bottom], [left, bottom]]
+
+
+def _line_left(line: OCRLine) -> float:
+    if line.box:
+        return min(point[0] for point in line.box)
+    return line.x
+
+
+def _line_right(line: OCRLine) -> float:
+    if line.box:
+        return max(point[0] for point in line.box)
+    return line.x
+
+
+def _line_top(line: OCRLine) -> float:
+    if line.box:
+        return min(point[1] for point in line.box)
+    return line.y
+
+
+def _line_bottom(line: OCRLine) -> float:
+    if line.box:
+        return max(point[1] for point in line.box)
+    return line.y
+
+
+def _line_width(line: OCRLine) -> float:
+    return max(_line_right(line) - _line_left(line), 1.0)
+
+
+def _line_height(line: OCRLine) -> float:
+    return max(_line_bottom(line) - _line_top(line), 1.0)
+
+
+def _line_center_y(line: OCRLine) -> float:
+    return _line_top(line) + (_line_height(line) / 2.0)
+
+
+def _page_height(lines: list[OCRLine]) -> float:
+    if not lines:
+        return 1.0
+    return max(_line_bottom(line) for line in lines)
+
+
+def _page_width(lines: list[OCRLine]) -> float:
+    if not lines:
+        return 1.0
+    return max(_line_right(line) for line in lines)
+
+
+def _normalized_y(line: OCRLine, page_height: float) -> float:
+    if page_height <= 0:
+        return 0.0
+    return _line_top(line) / page_height
+
+
+def _vertical_gap(previous: OCRLine, current: OCRLine) -> float:
+    return max(_line_top(current) - _line_bottom(previous), 0.0)
+
+
+def _contains_korean(value: str) -> bool:
+    return any("가" <= character <= "힣" for character in value)
+
+
+def _is_ascii_only(value: str) -> bool:
+    has_alpha = any(character.isalpha() for character in value)
+    return has_alpha and all(ord(character) < 128 for character in value if character.isalpha())
+
+
+def _extract_date(lines: list[str]) -> date | None:
+    best_match: tuple[float, date] | None = None
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        keyword_bonus = 20 if any(keyword in lowered for keyword in DATE_KEYWORDS) else 0
+        for pattern in DATE_PATTERNS:
+            match = pattern.search(line)
+            if match is None:
+                continue
+            year = int(match.group("year"))
+            if year < 100:
+                year += 2000
+            month = int(match.group("month"))
+            day = int(match.group("day"))
+            try:
+                parsed_date = date(year, month, day)
+            except ValueError:
+                continue
+            score = 50 + keyword_bonus - (index * 0.8)
+            if best_match is None or score > best_match[0]:
+                best_match = (score, parsed_date)
+    return best_match[1] if best_match else None
+
+
+def _extract_payment_method(lines: list[str], evidence_type: EvidenceType) -> PaymentMethod | None:
+    text = "\n".join(lines).lower()
+    if any(keyword in text for keyword in ONLINE_PAYMENT_KEYWORDS):
+        return PaymentMethod.ONLINE_PAYMENT
+    if evidence_type == EvidenceType.BANK_TRANSFER_STATEMENT or any(
+        keyword in text for keyword in BANK_TRANSFER_KEYWORDS
+    ):
+        return PaymentMethod.BANK_TRANSFER
+    if any(keyword in text for keyword in CASH_KEYWORDS):
+        return PaymentMethod.CASH
+    if any(keyword in text for keyword in CARD_KEYWORDS):
+        return PaymentMethod.CARD
+    if evidence_type == EvidenceType.E_RECEIPT:
+        return PaymentMethod.ONLINE_PAYMENT
+    return None
+
+
+def _extract_amount(lines: list[str], evidence_type: EvidenceType) -> Decimal | None:
+    payment_method = _extract_payment_method(lines, evidence_type)
+    derived_cash_total = _derive_cash_total(lines)
+    candidates: list[_AmountCandidate] = []
+
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        if BUSINESS_NUMBER_PATTERN.search(line) or PHONE_PATTERN.search(line):
+            continue
+        if any(keyword in lowered for keyword in AMOUNT_REJECTION_KEYWORDS):
+            continue
+
+        numbers = [match.group(1) for match in AMOUNT_PATTERN.finditer(line)]
+        if not numbers:
+            continue
+
+        for number_text in numbers:
+            value = _parse_decimal_value(number_text)
+            if value is None or value <= 0:
+                continue
+            digits = re.sub(r"\D", "", number_text)
+            if len(digits) >= 9:
+                continue
+
+            score = 10.0
+            if any(hint in lowered for hint in TOTAL_HINTS):
+                score += 45
+            if "원" in lowered or "krw" in lowered or "won" in lowered:
+                score += 10
+            if value >= Decimal("1000"):
+                score += 4
+            if index >= max(len(lines) - 4, 0):
+                score += 4
+            if any(
+                word in lowered
+                for word in ("부가세", "공급가액", "면세", "과세", "수량", "단가")
+            ):
+                score -= 25
+            if len(numbers) >= 3 and not any(hint in lowered for hint in TOTAL_HINTS):
+                score -= 15
+            if payment_method == PaymentMethod.CASH and any(
+                word in lowered for word in ("받을금액", "거스름돈")
+            ):
+                score -= 20
+
+            candidates.append(
+                _AmountCandidate(
+                    value=value,
+                    score=score,
+                    line_index=index,
+                    line=line,
+                )
+            )
+
+    if derived_cash_total is not None:
+        candidates.append(
+            _AmountCandidate(
+                value=derived_cash_total,
+                score=80,
+                line_index=len(lines),
+                line="cash_difference",
+            )
+        )
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: (candidate.score, candidate.value)).value
+
+
+def _extract_merchant(lines: list[str], evidence_type: EvidenceType) -> str | None:
+    if evidence_type == EvidenceType.BANK_TRANSFER_STATEMENT:
+        merchant = _extract_labelled_value(lines, ("받는분", "받는분명", "받는 사람"))
+        if merchant:
+            return merchant
+    if evidence_type == EvidenceType.E_RECEIPT:
+        merchant = _extract_labelled_value(
+            lines,
+            ("판매처", "가맹점명", "가맹점", "merchant", "store"),
+        )
+        if merchant:
+            return merchant
+
+    labelled = _extract_labelled_value(lines, MERCHANT_LABELS)
+    if labelled:
+        return labelled
+
+    candidates: list[tuple[float, str]] = []
+    search_limit = min(len(lines), 8)
+    for index in range(search_limit):
+        raw_line = lines[index]
+        candidate = _clean_merchant_candidate(raw_line)
+        if not candidate:
+            continue
+
+        score = 45 - (index * 3)
+        lowered = candidate.lower()
+        if any(keyword in lowered for keyword in MERCHANT_NOISE_KEYWORDS):
+            score -= 35
+        if _looks_like_address(candidate):
+            score -= 25
+        if BUSINESS_NUMBER_PATTERN.search(candidate) or PHONE_PATTERN.search(candidate):
+            score -= 35
+        if re.fullmatch(r"[\d\W]+", candidate):
+            score -= 50
+        score += _alpha_ratio(candidate) * 12
+        if any(keyword in raw_line.lower() for keyword in DATE_KEYWORDS + TOTAL_HINTS):
+            score -= 25
+        if len(candidate) >= 3:
+            score += 5
+        if score > 0:
+            candidates.append((score, candidate))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _extract_labelled_value(lines: list[str], labels: tuple[str, ...]) -> str | None:
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    pattern = re.compile(rf"^\s*(?:{label_pattern})\s*[:：-]?\s*(.*)$", flags=re.IGNORECASE)
+    for index, line in enumerate(lines[:10]):
+        match = pattern.match(line)
+        if match is None:
+            continue
+        candidate = _clean_merchant_candidate(match.group(1))
+        if candidate:
+            return candidate
+        if index + 1 < len(lines):
+            fallback = _clean_merchant_candidate(lines[index + 1])
+            if fallback:
+                return fallback
+    return None
+
+
+def _derive_cash_total(lines: list[str]) -> Decimal | None:
+    received: Decimal | None = None
+    change: Decimal | None = None
+    total: Decimal | None = None
+    for line in lines:
+        lowered = line.lower()
+        values = [_parse_decimal_value(match.group(1)) for match in AMOUNT_PATTERN.finditer(line)]
+        values = [value for value in values if value is not None]
+        if not values:
+            continue
+        if "받을금액" in lowered:
+            received = max(values)
+        elif "거스름돈" in lowered:
+            change = max(values)
+        elif any(hint in lowered for hint in TOTAL_HINTS):
+            total = max(values)
+    if total is not None:
+        return total
+    if received is not None and change is not None:
+        difference = received - change
+        if difference > 0:
+            return difference
+    return None
+
+
+def _clean_merchant_candidate(value: str) -> str | None:
+    candidate = normalize_extracted_text(value).replace(":", " ").replace("|", " ")
+    for label in MERCHANT_LABELS:
+        candidate = re.sub(
+            rf"^\s*{re.escape(label)}\s*[:：-]?\s*",
+            "",
+            candidate,
+            flags=re.IGNORECASE,
+        )
+    candidate = re.sub(
+        r"\b(?:사업자번호|사업자등록번호|대표자|전화번호|주소)\b.*$",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    )
+    candidate = BUSINESS_NUMBER_PATTERN.sub("", candidate)
+    candidate = PHONE_PATTERN.sub("", candidate)
+    candidate = re.sub(r"\b(?:tel|fax)\b.*$", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"\s{2,}", " ", candidate).strip(" -:/")
+    if not candidate:
+        return None
+    if any(keyword in candidate.lower() for keyword in MERCHANT_NOISE_KEYWORDS):
+        keep_words = ("카페", "식당", "편의점", "주유", "영업소")
+        if not any(word in candidate for word in keep_words):
+            return None
+    return candidate or None
+
+
+def _looks_like_address(value: str) -> bool:
+    lowered = value.lower()
+    hint_count = sum(hint.lower() in lowered for hint in ADDRESS_HINTS)
+    return hint_count >= 2 or bool(re.search(r"\d{1,4}-\d{1,4}", lowered))
+
+
+def _alpha_ratio(value: str) -> float:
+    alpha_count = sum(character.isalpha() for character in value)
+    if not value:
+        return 0.0
+    return alpha_count / len(value)
+
+
+def _parse_decimal_value(value: str) -> Decimal | None:
     try:
-        return Decimal(raw_number.replace(",", ""))
+        return Decimal(value.replace(",", ""))
     except InvalidOperation:
         return None
 
 
-def _iter_line_windows(
-    lines: list[str],
-    *,
-    max_window_size: int,
-    limit: int | None = None,
-) -> list[tuple[int, int, str]]:
-    capped_lines = lines[:limit] if limit is not None else lines
-    windows: list[tuple[int, int, str]] = []
-    for index in range(len(capped_lines)):
-        for window_size in range(1, max_window_size + 1):
-            if index + window_size > len(capped_lines):
-                break
-            segment = " ".join(
-                line.strip()
-                for line in capped_lines[index : index + window_size]
-                if line.strip()
-            )
-            if segment:
-                windows.append((index, window_size, segment))
-    return windows
+def _serialize_parsed_fields(fields: ParsedEvidenceFields) -> dict[str, Any]:
+    return {
+        "evidence_date": fields.evidence_date.isoformat() if fields.evidence_date else None,
+        "merchant_name": fields.merchant_name,
+        "amount": str(fields.amount) if fields.amount is not None else None,
+        "payment_method": fields.payment_method.value if fields.payment_method else None,
+        "confidence": round(fields.confidence, 4),
+    }
 
 
-def _find_loose_amount_numbers(
-    text: str,
-    *,
-    allow_short_groups: bool,
-) -> list[str]:
-    patterns = [
-        re.compile(r"(?<!\d)(\d{1,2})\s*[.,]\s*(\d{3})(?:\s*[원%Oo!Bb])?(?!\d)"),
-        re.compile(r"(?<!\d)(\d{1,2})\s+(\d{3})[8%!]?(?!\d)"),
-    ]
-    if allow_short_groups:
-        patterns.append(
-            re.compile(r"(?<!\d)(\d)\s*[.,]\s*(\d{2})(?:\s*[원%Oo!Bb])?(?!\d)")
-        )
-
-    numbers: list[str] = []
-    for pattern in patterns:
-        for match in pattern.finditer(text):
-            numbers.append(f"{match.group(1)}{match.group(2)}")
-    return numbers
+def _serialize_field_value(field_name: str, value: Any) -> Any:
+    if field_name == "date" and isinstance(value, date):
+        return value.isoformat()
+    if field_name == "amount" and isinstance(value, Decimal):
+        return str(value)
+    if field_name == "payment" and isinstance(value, PaymentMethod):
+        return value.value
+    return value
 
 
-def _dedupe_preserving_order(values: list[str]) -> list[str]:
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        deduped.append(value)
-    return deduped
+def _distance(point_a: Any, point_b: Any) -> float:
+    dx = float(point_a[0]) - float(point_b[0])
+    dy = float(point_a[1]) - float(point_b[1])
+    return (dx * dx + dy * dy) ** 0.5
 
 
-def _apply_merchant_fixups(candidate: str) -> str:
-    fixed = candidate
-    for pattern, replacement in MERCHANT_FIXUP_PATTERNS:
-        fixed = pattern.sub(replacement, fixed)
-    if "현대" in fixed and "오일뱅크" in fixed and not fixed.lstrip().startswith("HD현대"):
-        fixed = re.sub(r"^\d*\s*현대", "HD현대", fixed, count=1)
-    fixed = re.sub(r"\s+", " ", fixed).strip()
-    return fixed
-
-
-def _select_best_date(attempts: list[OCRAttempt]) -> date | None:
-    weighted_candidates: dict[date, float] = {}
-    current_year = date.today().year
-    for attempt in attempts:
-        candidate = attempt.parsed.evidence_date
-        if candidate is None:
-            continue
-        weight = attempt.score
-        if candidate.year == current_year:
-            weight += 6
-        if candidate.year == current_year + 1:
-            weight += 2
-        weighted_candidates[candidate] = weighted_candidates.get(candidate, 0.0) + weight
-
-    if not weighted_candidates:
-        return None
-    return max(weighted_candidates.items(), key=lambda item: item[1])[0]
-
-
-def _select_best_amount(attempts: list[OCRAttempt]) -> Decimal | None:
-    weighted_candidates: dict[Decimal, float] = {}
-    for attempt in attempts:
-        candidate = attempt.parsed.amount
-        if candidate is None:
-            continue
-        weight = attempt.score
-        if candidate % Decimal("1000") == 0:
-            weight += 12
-        elif candidate % Decimal("100") == 0:
-            weight += 4
-        if Decimal("2000") <= candidate <= Decimal("2100"):
-            weight -= 40
-        evidence_date = attempt.parsed.evidence_date
-        if evidence_date is not None and candidate == Decimal(str(evidence_date.year)):
-            weight -= 80
-        weighted_candidates[candidate] = weighted_candidates.get(candidate, 0.0) + weight
-
-    if not weighted_candidates:
-        return None
-
-    adjusted_candidates = dict(weighted_candidates)
-    for candidate, _weight in weighted_candidates.items():
-        if candidate % Decimal("1000") != 0:
-            continue
-        for other_candidate, other_weight in weighted_candidates.items():
-            if other_candidate >= candidate:
-                continue
-            gap_ratio = (candidate - other_candidate) / candidate
-            if Decimal("0.07") <= gap_ratio <= Decimal("0.12"):
-                adjusted_candidates[candidate] += other_weight * 0.7
-
-    return max(adjusted_candidates.items(), key=lambda item: item[1])[0]
-
-
-def _select_best_merchant_name(attempts: list[OCRAttempt]) -> str | None:
-    clusters: list[dict[str, Any]] = []
-    for attempt in attempts:
-        candidate = attempt.parsed.merchant_name
-        if not candidate:
-            continue
-        quality = _score_merchant_candidate(candidate, index=0, window_size=1)
-        weight = attempt.score + quality
-        for cluster in clusters:
-            similarity = SequenceMatcher(
-                None,
-                _normalize_candidate_key(candidate),
-                cluster["key"],
-            ).ratio()
-            if similarity >= 0.82:
-                cluster["weight"] += weight
-                if quality > cluster["quality"]:
-                    cluster["value"] = candidate
-                    cluster["quality"] = quality
-                    cluster["key"] = _normalize_candidate_key(candidate)
-                break
-        else:
-            clusters.append(
-                {
-                    "value": candidate,
-                    "quality": quality,
-                    "weight": weight,
-                    "key": _normalize_candidate_key(candidate),
-                }
-            )
-
-    if not clusters:
-        return None
-    best_value = max(clusters, key=lambda item: (item["weight"], item["quality"]))["value"]
-    best_value = _apply_merchant_fixups(best_value)
-
-    combined_value = _combine_brand_and_merchant(best_value, clusters)
-    if combined_value is not None:
-        return combined_value
-    return best_value
-
-
-def _select_best_payment_method(
-    attempts: list[OCRAttempt],
-    evidence_type: EvidenceType,
-) -> PaymentMethod | None:
-    weighted_candidates: dict[PaymentMethod, float] = {}
-    for attempt in attempts:
-        candidate = attempt.parsed.payment_method
-        if candidate is None:
-            continue
-        weighted_candidates[candidate] = weighted_candidates.get(candidate, 0.0) + attempt.score
-
-    if weighted_candidates:
-        return max(weighted_candidates.items(), key=lambda item: item[1])[0]
-    return _extract_payment_method("", evidence_type)
-
-
-def _normalize_candidate_key(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value).lower()
-    return "".join(character for character in normalized if character.isalnum())
-
-
-def _combine_brand_and_merchant(
-    merchant_value: str,
-    clusters: list[dict[str, Any]],
-) -> str | None:
-    if "주유" not in merchant_value or "오일뱅크" in merchant_value:
-        return None
-
-    for cluster in clusters:
-        brand_prefix = _extract_brand_prefix(cluster["value"])
-        if brand_prefix is None:
-            continue
-        return f"{brand_prefix} {merchant_value}"
-    return None
-
-
-def _extract_brand_prefix(candidate: str) -> str | None:
-    fixed_candidate = _apply_merchant_fixups(candidate)
-    brand_match = re.search(r"(?:HD\s*)?현대[^\s]{0,12}?오일뱅크", fixed_candidate)
-    if brand_match is None:
-        return None
-    brand_prefix = brand_match.group(0)
-    if brand_prefix.startswith("현대"):
-        brand_prefix = f"HD{brand_prefix}"
-    return brand_prefix
+def _order_points(points: Any) -> list[list[float]]:
+    points_list = [[float(point[0]), float(point[1])] for point in points]
+    sums = [point[0] + point[1] for point in points_list]
+    diffs = [point[0] - point[1] for point in points_list]
+    top_left = points_list[sums.index(min(sums))]
+    bottom_right = points_list[sums.index(max(sums))]
+    top_right = points_list[diffs.index(min(diffs))]
+    bottom_left = points_list[diffs.index(max(diffs))]
+    return [top_left, top_right, bottom_right, bottom_left]
