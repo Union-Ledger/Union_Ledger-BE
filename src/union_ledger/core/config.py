@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     )
     storage_root: Path = Path("storage")
     ocr_engine: str = "paddleocr"
+    ocr_mode: str = "local"  # "local" = CPU PaddleOCR, "modal" = Modal GPU Worker
     paddleocr_lang: str = "korean"
     ocr_min_line_confidence: float = 0.25
     allowed_origins: list[str] = Field(

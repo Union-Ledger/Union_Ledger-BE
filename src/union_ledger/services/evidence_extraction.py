@@ -22,6 +22,8 @@ PIPELINE_STAGES = (
     "background_removal",
     "document_enhancement",
     "adaptive_binarization",
+    "upscaled_enhancement",
+    "sharpening",
 )
 
 DATE_KEYWORDS = (
@@ -55,9 +57,6 @@ MERCHANT_NOISE_KEYWORDS = (
     "조회",
     "발행",
     "고객용",
-    "승인",
-    "결제",
-    "거래",
     "사업자",
     "전화",
     "주소",
@@ -66,14 +65,9 @@ MERCHANT_NOISE_KEYWORDS = (
     "공급가액",
     "면세",
     "과세",
-    "카드",
-    "현금",
     "합계",
     "총계",
     "총액",
-    "금액",
-    "주문",
-    "번호",
     "포스",
     "pos",
 )
@@ -81,6 +75,20 @@ ADDRESS_HINTS = (
     "서울",
     "경기",
     "인천",
+    "부산",
+    "대구",
+    "대전",
+    "광주",
+    "울산",
+    "세종",
+    "충북",
+    "충남",
+    "전북",
+    "전남",
+    "경북",
+    "경남",
+    "강원",
+    "제주",
     "광진구",
     "송파구",
     "강남구",
@@ -89,7 +97,6 @@ ADDRESS_HINTS = (
     "로 ",
     "길 ",
     "층",
-    "동",
 )
 TOTAL_HINTS = (
     "결제금액",
@@ -305,21 +312,9 @@ def merge_ocr_attempt_fields(
     if not attempts:
         raise ExtractionError("병합할 OCR 시도가 없습니다.")
 
-    date_choice = _select_field_choice(
-        attempts,
-        lambda attempt: attempt.parsed.evidence_date,
-        lambda attempt: _field_score(attempt, "date"),
-    )
-    merchant_choice = _select_field_choice(
-        attempts,
-        lambda attempt: attempt.parsed.merchant_name,
-        lambda attempt: _field_score(attempt, "merchant"),
-    )
-    amount_choice = _select_field_choice(
-        attempts,
-        lambda attempt: attempt.parsed.amount,
-        lambda attempt: _field_score(attempt, "amount"),
-    )
+    date_choice = _select_date_with_consensus(attempts)
+    merchant_choice = _select_merchant_with_consensus(attempts)
+    amount_choice = _select_amount_with_consensus(attempts)
     payment_choice = _select_field_choice(
         attempts,
         lambda attempt: attempt.parsed.payment_method,
@@ -461,6 +456,9 @@ class EvidenceExtractionService:
         variants: list[PreparedImageVariant],
         evidence_type: EvidenceType,
     ) -> list[OCRAttempt]:
+        if self._settings.ocr_mode == "modal":
+            return self._collect_modal_ocr_attempts_parallel(variants, evidence_type)
+
         attempts: list[OCRAttempt] = []
         for variant in variants:
             raw_text, average_confidence, line_count, lines = self._run_paddle_ocr(variant.path)
@@ -479,13 +477,67 @@ class EvidenceExtractionService:
             raise ExtractionError("이미지에서 OCR 텍스트를 추출하지 못했습니다.")
         return sorted(attempts, key=lambda attempt: attempt.score, reverse=True)
 
+    def _collect_modal_ocr_attempts_parallel(
+        self,
+        variants: list[PreparedImageVariant],
+        evidence_type: EvidenceType,
+    ) -> list[OCRAttempt]:
+        try:
+            import modal
+        except ImportError as exc:
+            raise ExtractionConfigurationError(
+                "Modal 의존성이 설치되지 않았습니다."
+            ) from exc
+
+        worker_cls = modal.Cls.from_name("union-ledger-ocr", "OCRWorker")
+        worker = worker_cls()
+
+        results = [worker.run_ocr.remote(v.path.read_bytes()) for v in variants]
+
+        attempts: list[OCRAttempt] = []
+        for variant, result in zip(variants, results):
+            lines = self._parse_modal_lines(result)
+            filtered = [l for l in lines if l.confidence >= self._settings.ocr_min_line_confidence]
+            raw_text = "\n".join(l.text for l in filtered)
+            avg_conf = (
+                sum(l.confidence for l in filtered) / len(filtered) if filtered else 0.0
+            )
+            attempt = build_ocr_attempt(
+                normalize_extracted_text(raw_text),
+                evidence_type,
+                preprocessing=variant.label,
+                average_confidence=round(avg_conf, 4),
+                line_count=len(filtered),
+                lines=filtered,
+            )
+            if attempt.raw_text:
+                attempts.append(attempt)
+
+        if not attempts:
+            raise ExtractionError("이미지에서 OCR 텍스트를 추출하지 못했습니다.")
+        return sorted(attempts, key=lambda a: a.score, reverse=True)
+
+    def _parse_modal_lines(self, result: dict[str, Any]) -> list[OCRLine]:
+        lines: list[OCRLine] = []
+        for ld in result.get("lines", []):
+            text = normalize_extracted_text(str(ld.get("text", "")))
+            if not text:
+                continue
+            conf = float(ld.get("confidence", 0.0))
+            box = ld.get("box", [])
+            y = min(p[1] for p in box) if box else 0.0
+            x = min(p[0] for p in box) if box else 0.0
+            lines.append(OCRLine(text=text, confidence=conf, box=box, y=y, x=x))
+        lines.sort(key=lambda l: (l.y, l.x))
+        return lines
+
     def _prepare_image_variants(
         self,
         file_path: Path,
         temp_root: Path,
         evidence_type: EvidenceType,
     ) -> list[PreparedImageVariant]:
-        cv2, _, threshold_sauvola = self._load_ocr_dependencies()
+        cv2, np, threshold_sauvola = self._load_ocr_dependencies()
         image = self._load_cv_image(file_path, cv2)
         variants: list[PreparedImageVariant] = []
 
@@ -513,7 +565,38 @@ class EvidenceExtractionService:
             self._enhance_document(background_removed, cv2, threshold_sauvola),
         )
         add_variant("adaptive_binary", self._adaptive_binarize(enhanced, cv2))
+
+        sharpened = self._sharpen_for_ocr(background_removed, cv2)
+        add_variant("sharpened", sharpened)
+
         return variants
+
+    def _upscale_for_ocr(self, image: Any, cv2: Any) -> Any:
+        height, width = image.shape[:2]
+        if max(height, width) >= 2400:
+            return None
+        scale = min(1.5, 3200 / max(height, width))
+        if scale <= 1.05:
+            return None
+        return cv2.resize(
+            image,
+            (int(width * scale), int(height * scale)),
+            interpolation=cv2.INTER_CUBIC,
+        )
+
+    def _sharpen_for_ocr(self, image: Any, cv2: Any) -> Any:
+        import numpy as np
+
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(4, 4))
+        contrasted = clahe.apply(gray)
+        sharpened = cv2.addWeighted(
+            contrasted, 2.0,
+            cv2.GaussianBlur(contrasted, (0, 0), 3), -1.0,
+            0,
+        )
+        sharpened = np.clip(sharpened, 0, 255).astype("uint8")
+        return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
 
     def _load_ocr_dependencies(self) -> tuple[Any, Any, Any]:
         try:
@@ -579,6 +662,54 @@ class EvidenceExtractionService:
         return self._paddle_ocr_engine
 
     def _run_paddle_ocr(self, file_path: Path) -> tuple[str, float, int, list[OCRLine]]:
+        if self._settings.ocr_mode == "modal":
+            return self._run_modal_ocr(file_path)
+        return self._run_local_paddle_ocr(file_path)
+
+    def _run_modal_ocr(self, file_path: Path) -> tuple[str, float, int, list[OCRLine]]:
+        try:
+            import modal
+        except ImportError as exc:
+            raise ExtractionConfigurationError(
+                "Modal 의존성이 설치되지 않았습니다. `modal`을 설치해 주세요."
+            ) from exc
+
+        image_bytes = file_path.read_bytes()
+        try:
+            worker_cls = modal.Cls.from_name("union-ledger-ocr", "OCRWorker")
+            result = worker_cls().run_ocr.remote(image_bytes)
+        except Exception as exc:
+            raise ExtractionError(f"Modal OCR Worker 호출에 실패했습니다: {exc}") from exc
+
+        lines: list[OCRLine] = []
+        for line_data in result.get("lines", []):
+            text = normalize_extracted_text(str(line_data.get("text", "")))
+            if not text:
+                continue
+            confidence = float(line_data.get("confidence", 0.0))
+            box = line_data.get("box", [])
+            y = min(point[1] for point in box) if box else 0.0
+            x = min(point[0] for point in box) if box else 0.0
+            lines.append(OCRLine(text=text, confidence=confidence, box=box, y=y, x=x))
+
+        lines.sort(key=lambda line: (line.y, line.x))
+        filtered_lines = [
+            line for line in lines if line.confidence >= self._settings.ocr_min_line_confidence
+        ]
+        raw_text = "\n".join(line.text for line in filtered_lines)
+        average_confidence = (
+            sum(line.confidence for line in filtered_lines) / len(filtered_lines)
+            if filtered_lines
+            else 0.0
+        )
+        return (
+            normalize_extracted_text(raw_text),
+            round(average_confidence, 4),
+            len(filtered_lines),
+            filtered_lines,
+        )
+
+    def _run_local_paddle_ocr(self, file_path: Path) -> tuple[str, float, int, list[OCRLine]]:
         engine = self._get_paddle_ocr_engine()
         try:
             if hasattr(engine, "predict"):
@@ -692,9 +823,8 @@ class EvidenceExtractionService:
             raise ExtractionError("이미지 파일을 열 수 없습니다.")
         return self._resize_cv_image(matrix, cv2)
 
-    def _resize_cv_image(self, image: Any, cv2: Any) -> Any:
+    def _resize_cv_image(self, image: Any, cv2: Any, max_dimension: int = 2600) -> Any:
         height, width = image.shape[:2]
-        max_dimension = 2200
         longest_edge = max(height, width)
         if longest_edge <= max_dimension:
             return image
@@ -722,7 +852,7 @@ class EvidenceExtractionService:
                 break
 
         if document_contour is None:
-            return image
+            return self._deskew(image, cv2)
 
         ordered = _order_points(document_contour)
         top_left, top_right, bottom_right, bottom_left = ordered
@@ -733,7 +863,7 @@ class EvidenceExtractionService:
         target_width = int(max(width_top, width_bottom))
         target_height = int(max(height_left, height_right))
         if target_width < 50 or target_height < 50:
-            return image
+            return self._deskew(image, cv2)
 
         destination = [
             [0.0, 0.0],
@@ -745,7 +875,43 @@ class EvidenceExtractionService:
             np.float32(ordered),
             np.float32(destination),
         )
-        return cv2.warpPerspective(image, matrix, (target_width, target_height))
+        warped = cv2.warpPerspective(image, matrix, (target_width, target_height))
+        return self._deskew(warped, cv2)
+
+    def _deskew(self, image: Any, cv2: Any) -> Any:
+        import numpy as np
+
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        lines = cv2.HoughLinesP(binary, 1, np.pi / 180, 100, minLineLength=80, maxLineGap=10)
+        if lines is None:
+            return image
+
+        angles = []
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            dx = x2 - x1
+            dy = y2 - y1
+            if abs(dx) < 5:
+                continue
+            angle = np.degrees(np.arctan2(dy, dx))
+            if abs(angle) < 15:
+                angles.append(angle)
+
+        if not angles:
+            return image
+
+        median_angle = float(np.median(angles))
+        if abs(median_angle) < 0.3:
+            return image
+
+        height, width = image.shape[:2]
+        center = (width / 2, height / 2)
+        rotation_matrix = cv2.getRotationMatrix2D(center, median_angle, 1.0)
+        return cv2.warpAffine(
+            image, rotation_matrix, (width, height),
+            flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE,
+        )
 
     def _remove_background(self, image: Any, cv2: Any) -> Any:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -775,27 +941,43 @@ class EvidenceExtractionService:
         return image[y0:y1, x0:x1]
 
     def _enhance_document(self, image: Any, cv2: Any, threshold_sauvola: Any) -> Any:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-        contrasted = clahe.apply(gray)
-        denoised = cv2.bilateralFilter(contrasted, 9, 35, 35)
+        import numpy as np
 
-        sauvola_threshold = threshold_sauvola(denoised, window_size=31, k=0.12)
-        mask = denoised > sauvola_threshold
-        enhanced = denoised.copy()
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        clahe = cv2.createCLAHE(clipLimit=3.2, tileGridSize=(6, 6))
+        contrasted = clahe.apply(gray)
+
+        denoised = cv2.bilateralFilter(contrasted, 9, 40, 40)
+
+        sharpened = cv2.addWeighted(
+            denoised, 1.5,
+            cv2.GaussianBlur(denoised, (0, 0), 3), -0.5,
+            0,
+        )
+
+        sauvola_threshold = threshold_sauvola(sharpened, window_size=25, k=0.15)
+        mask = sharpened > sauvola_threshold
+        enhanced = sharpened.copy()
         enhanced[mask] = 255
-        enhanced[~mask] = (enhanced[~mask] * 0.82).clip(0, 255).astype("uint8")
+        enhanced[~mask] = np.clip(enhanced[~mask] * 0.7, 0, 255).astype("uint8")
         return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
 
     def _adaptive_binarize(self, image: Any, cv2: Any) -> Any:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        sharpened = cv2.addWeighted(
+            gray, 1.4,
+            cv2.GaussianBlur(gray, (0, 0), 2), -0.4,
+            0,
+        )
         adaptive = cv2.adaptiveThreshold(
-            gray,
+            sharpened,
             255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY,
-            31,
-            9,
+            25,
+            11,
         )
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
         cleaned = cv2.morphologyEx(adaptive, cv2.MORPH_OPEN, kernel, iterations=1)
@@ -850,6 +1032,106 @@ def _select_field_choice(
     return best_choice
 
 
+def _select_amount_with_consensus(attempts: list[OCRAttempt]) -> _FieldChoice | None:
+    from collections import Counter as _Counter
+
+    amount_votes: _Counter[str] = _Counter()
+    amount_attempts: dict[str, list[OCRAttempt]] = {}
+    for attempt in attempts:
+        if attempt.parsed.amount is not None:
+            key = str(attempt.parsed.amount)
+            amount_votes[key] += 1
+            amount_attempts.setdefault(key, []).append(attempt)
+
+    if not amount_votes:
+        return None
+
+    most_common_value, most_common_count = amount_votes.most_common(1)[0]
+    if most_common_count >= 2:
+        best_attempt = max(
+            amount_attempts[most_common_value],
+            key=lambda a: _field_score(a, "amount"),
+        )
+        return _FieldChoice(
+            value=best_attempt.parsed.amount,
+            score=_field_score(best_attempt, "amount"),
+            attempt=best_attempt,
+        )
+
+    return _select_field_choice(
+        attempts,
+        lambda attempt: attempt.parsed.amount,
+        lambda attempt: _field_score(attempt, "amount"),
+    )
+
+
+def _select_date_with_consensus(attempts: list[OCRAttempt]) -> _FieldChoice | None:
+    from collections import Counter as _Counter
+
+    date_votes: _Counter[str] = _Counter()
+    date_attempts: dict[str, list[OCRAttempt]] = {}
+    for attempt in attempts:
+        if attempt.parsed.evidence_date is not None:
+            key = attempt.parsed.evidence_date.isoformat()
+            date_votes[key] += 1
+            date_attempts.setdefault(key, []).append(attempt)
+
+    if not date_votes:
+        return None
+
+    most_common_value, most_common_count = date_votes.most_common(1)[0]
+    if most_common_count >= 2:
+        best_attempt = max(
+            date_attempts[most_common_value],
+            key=lambda a: _field_score(a, "date"),
+        )
+        return _FieldChoice(
+            value=best_attempt.parsed.evidence_date,
+            score=_field_score(best_attempt, "date"),
+            attempt=best_attempt,
+        )
+
+    return _select_field_choice(
+        attempts,
+        lambda attempt: attempt.parsed.evidence_date,
+        lambda attempt: _field_score(attempt, "date"),
+    )
+
+
+def _select_merchant_with_consensus(attempts: list[OCRAttempt]) -> _FieldChoice | None:
+    import re as _re
+    from collections import Counter as _Counter
+
+    merchant_votes: _Counter[str] = _Counter()
+    merchant_attempts: dict[str, list[OCRAttempt]] = {}
+    for attempt in attempts:
+        if attempt.parsed.merchant_name:
+            key = _re.sub(r"[\s·\-_.,()（）]", "", attempt.parsed.merchant_name).lower()
+            merchant_votes[key] += 1
+            merchant_attempts.setdefault(key, []).append(attempt)
+
+    if not merchant_votes:
+        return None
+
+    most_common_value, most_common_count = merchant_votes.most_common(1)[0]
+    if most_common_count >= 2:
+        best_attempt = max(
+            merchant_attempts[most_common_value],
+            key=lambda a: _field_score(a, "merchant"),
+        )
+        return _FieldChoice(
+            value=best_attempt.parsed.merchant_name,
+            score=_field_score(best_attempt, "merchant"),
+            attempt=best_attempt,
+        )
+
+    return _select_field_choice(
+        attempts,
+        lambda attempt: attempt.parsed.merchant_name,
+        lambda attempt: _field_score(attempt, "merchant"),
+    )
+
+
 def _field_value(attempt: OCRAttempt, field_name: str) -> Any:
     match field_name:
         case "date":
@@ -867,12 +1149,28 @@ def _field_value(attempt: OCRAttempt, field_name: str) -> Any:
 def _field_score(attempt: OCRAttempt, field_name: str) -> float:
     base = attempt.score + (attempt.average_confidence * 10)
     if field_name == "merchant":
-        bonus = 6 if attempt.preprocessing in {"perspective_corrected", "background_cropped"} else 0
+        bonus = 0
+        if attempt.preprocessing in {"perspective_corrected", "background_cropped"}:
+            bonus = 6
+        elif attempt.preprocessing == "upscaled_enhanced":
+            bonus = 5
+        elif attempt.preprocessing == "sharpened":
+            bonus = 4
         return base + bonus
     if field_name == "amount":
-        return base + (6 if attempt.preprocessing == "adaptive_binary" else 0)
+        bonus = 0
+        if attempt.preprocessing == "adaptive_binary":
+            bonus = 2
+        elif attempt.preprocessing in {"upscaled_enhanced", "sharpened"}:
+            bonus = 1
+        return base + bonus
     if field_name == "date":
-        return base + (3 if attempt.preprocessing == "document_enhanced" else 0)
+        bonus = 0
+        if attempt.preprocessing == "document_enhanced":
+            bonus = 3
+        elif attempt.preprocessing == "upscaled_enhanced":
+            bonus = 3
+        return base + bonus
     return base
 
 
@@ -897,6 +1195,10 @@ def _score_ocr_attempt(
         score += 4
     if evidence_type == EvidenceType.PHYSICAL_RECEIPT and preprocessing == "background_cropped":
         score += 3
+    if preprocessing == "upscaled_enhanced":
+        score += 3
+    if preprocessing == "sharpened":
+        score += 2
     return round(score, 4)
 
 
@@ -1126,7 +1428,7 @@ def _extract_amount_from_layout(
                 ):
                     score -= 55
                 if payment_method == PaymentMethod.CASH and any(
-                    word in line_lower for word in ("받을금액", "거스름돈")
+                    word in line_lower for word in ("받을금액", "받은금액", "을금액", "은금액", "거스름돈", "스름돈", "거스름")
                 ):
                     score -= 18
                 if _normalized_y(line, page_height) <= 0.22 and not context_has_total_hint:
@@ -1169,6 +1471,35 @@ def _extract_amount_from_layout(
                         score=score,
                         line_index=index + offset,
                         line=f"{line.text} -> {nearby_line.text}",
+                        has_total_hint=True,
+                    )
+                )
+
+        for offset in (1, 2):
+            backward_index = index - offset
+            if backward_index < 0:
+                break
+            nearby_line = lines[backward_index]
+            if _vertical_gap(nearby_line, line) > 28:
+                break
+            if _should_reject_amount_context(nearby_line.text, True):
+                continue
+
+            for number_text, value in _iter_amount_values(nearby_line.text):
+                digits = re.sub(r"\D", "", number_text)
+                if len(digits) >= 9:
+                    continue
+                score = 70 - (offset * 6)
+                if _normalized_y(nearby_line, page_height) >= 0.45:
+                    score += 10
+                if value >= Decimal("1000"):
+                    score += 8
+                candidates.append(
+                    _AmountCandidate(
+                        value=value,
+                        score=score,
+                        line_index=backward_index,
+                        line=f"{nearby_line.text} <- {line.text}",
                         has_total_hint=True,
                     )
                 )
@@ -1325,9 +1656,9 @@ def _derive_cash_total_from_layout(lines: list[OCRLine]) -> Decimal | None:
         values = [value for _, value in _iter_amount_values(line.text)]
         if not values:
             continue
-        if "받을금액" in lowered:
+        if any(kw in lowered for kw in ("받을금액", "받은금액", "을금액", "은금액", "받을 금액", "받은 금액")):
             received = max(values)
-        elif "거스름돈" in lowered:
+        elif any(kw in lowered for kw in ("거스름돈", "스름돈", "거스름", "거슬러")):
             change = max(values)
         elif any(hint in lowered for hint in TOTAL_HINTS):
             total = max(values)
@@ -1639,9 +1970,9 @@ def _derive_cash_total(lines: list[str]) -> Decimal | None:
         values = [value for value in values if value is not None]
         if not values:
             continue
-        if "받을금액" in lowered:
+        if any(kw in lowered for kw in ("받을금액", "받은금액", "을금액", "은금액", "받을 금액", "받은 금액")):
             received = max(values)
-        elif "거스름돈" in lowered:
+        elif any(kw in lowered for kw in ("거스름돈", "스름돈", "거스름", "거슬러")):
             change = max(values)
         elif any(hint in lowered for hint in TOTAL_HINTS):
             total = max(values)
@@ -1676,7 +2007,14 @@ def _clean_merchant_candidate(value: str) -> str | None:
     if not candidate:
         return None
     if any(keyword in candidate.lower() for keyword in MERCHANT_NOISE_KEYWORDS):
-        keep_words = ("카페", "식당", "편의점", "주유", "영업소")
+        keep_words = (
+            "카페", "식당", "편의점", "주유", "영업소", "마트", "스토어", "store",
+            "볼링", "당구", "노래", "pc방", "피씨방", "플레이", "play",
+            "마라탕", "치킨", "피자", "버거", "빵", "베이커리", "bakery",
+            "약국", "병원", "의원", "센터", "학원", "서점",
+            "CU", "GS", "세븐", "이마트", "롯데", "현대",
+            "프라자", "plaza", "타워", "tower",
+        )
         if not any(word in candidate for word in keep_words):
             return None
     return candidate or None

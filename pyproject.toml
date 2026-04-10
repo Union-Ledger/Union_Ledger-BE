@@ -26,6 +26,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gpu = [
+  "modal>=0.73.0,<1.0.0",
+]
 dev = [
   "httpx>=0.28.1,<1.0.0",
   "pytest>=8.4.2,<9.0.0",
