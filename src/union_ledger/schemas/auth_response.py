@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+import uuid
+
+from pydantic import BaseModel
+
+from union_ledger.models.enums import RoleType
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class AuthUser(BaseModel):
+    id: uuid.UUID
+    email: str
+    name: str | None
+    roles: list[RoleType]
+
+
+class SendVerificationCodeResponse(BaseModel):
+    message: str
+    expires_in_seconds: int
+    debug_code: str | None = None
+
+
+class VerifyEmailCodeResponse(BaseModel):
+    message: str
+    verified: bool

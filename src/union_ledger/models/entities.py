@@ -26,10 +26,19 @@ from union_ledger.models.enums import (
 )
 
 
+def _enum_column(enum_cls: type, name: str) -> Enum:
+    return Enum(
+        enum_cls,
+        name=name,
+        values_callable=lambda enum_values: [member.value for member in enum_values],
+    )
+
+
 class User(TimestampedUUIDModel):
     __tablename__ = "users"
 
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255))
     name: Mapped[str | None] = mapped_column(String(120))
     university_email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -62,7 +71,7 @@ class OrganizationMembership(TimestampedUUIDModel):
         nullable=False,
     )
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
-    role: Mapped[RoleType] = mapped_column(Enum(RoleType, name="role_type"), nullable=False)
+    role: Mapped[RoleType] = mapped_column(_enum_column(RoleType, "role_type"), nullable=False)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     organization: Mapped[Organization] = relationship(back_populates="memberships")
@@ -78,13 +87,16 @@ class Invitation(TimestampedUUIDModel):
     )
     invited_email: Mapped[str] = mapped_column(String(255), nullable=False)
     invitation_type: Mapped[InvitationType] = mapped_column(
-        Enum(InvitationType, name="invitation_type"),
+        _enum_column(InvitationType, "invitation_type"),
         nullable=False,
     )
-    role: Mapped[RoleType] = mapped_column(Enum(RoleType, name="invited_role_type"), nullable=False)
+    role: Mapped[RoleType] = mapped_column(
+        _enum_column(RoleType, "invited_role_type"),
+        nullable=False,
+    )
     code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     status: Mapped[InvitationStatus] = mapped_column(
-        Enum(InvitationStatus, name="invitation_status"),
+        _enum_column(InvitationStatus, "invitation_status"),
         default=InvitationStatus.PENDING,
         nullable=False,
     )
@@ -120,7 +132,7 @@ class Settlement(TimestampedUUIDModel):
     semester: Mapped[str] = mapped_column(String(20), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[SettlementStatus] = mapped_column(
-        Enum(SettlementStatus, name="settlement_status"),
+        _enum_column(SettlementStatus, "settlement_status"),
         default=SettlementStatus.DRAFT,
         nullable=False,
     )
@@ -150,16 +162,16 @@ class Evidence(TimestampedUUIDModel):
         nullable=False,
     )
     evidence_type: Mapped[EvidenceType] = mapped_column(
-        Enum(EvidenceType, name="evidence_type"),
+        _enum_column(EvidenceType, "evidence_type"),
         nullable=False,
     )
     status: Mapped[EvidenceStatus] = mapped_column(
-        Enum(EvidenceStatus, name="evidence_status"),
+        _enum_column(EvidenceStatus, "evidence_status"),
         default=EvidenceStatus.UPLOADED,
         nullable=False,
     )
     extraction_method: Mapped[ExtractionMethod | None] = mapped_column(
-        Enum(ExtractionMethod, name="extraction_method")
+        _enum_column(ExtractionMethod, "extraction_method")
     )
     source_file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     source_file_path: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -168,7 +180,7 @@ class Evidence(TimestampedUUIDModel):
     merchant_name: Mapped[str | None] = mapped_column(String(255))
     amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     payment_method: Mapped[PaymentMethod | None] = mapped_column(
-        Enum(PaymentMethod, name="payment_method")
+        _enum_column(PaymentMethod, "payment_method")
     )
     budget_category: Mapped[str | None] = mapped_column(String(120))
 
@@ -182,7 +194,7 @@ class BankStatementUpload(TimestampedUUIDModel):
     source_file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     source_file_path: Mapped[str] = mapped_column(String(512), nullable=False)
     status: Mapped[BankStatementStatus] = mapped_column(
-        Enum(BankStatementStatus, name="bank_statement_status"),
+        _enum_column(BankStatementStatus, "bank_statement_status"),
         default=BankStatementStatus.UPLOADED,
         nullable=False,
     )
@@ -215,7 +227,7 @@ class ReconciliationResult(TimestampedUUIDModel):
         ForeignKey("bank_transactions.id")
     )
     status: Mapped[MatchStatus] = mapped_column(
-        Enum(MatchStatus, name="match_status"),
+        _enum_column(MatchStatus, "match_status"),
         default=MatchStatus.MATCHED,
         nullable=False,
     )
@@ -242,11 +254,11 @@ class SettlementArtifact(TimestampedUUIDModel):
 
     settlement_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("settlements.id"), nullable=False)
     artifact_type: Mapped[ArtifactType] = mapped_column(
-        Enum(ArtifactType, name="artifact_type"),
+        _enum_column(ArtifactType, "artifact_type"),
         nullable=False,
     )
     status: Mapped[ArtifactStatus] = mapped_column(
-        Enum(ArtifactStatus, name="artifact_status"),
+        _enum_column(ArtifactStatus, "artifact_status"),
         default=ArtifactStatus.QUEUED,
         nullable=False,
     )
@@ -260,7 +272,7 @@ class Notification(TimestampedUUIDModel):
 
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     notification_type: Mapped[NotificationType] = mapped_column(
-        Enum(NotificationType, name="notification_type"),
+        _enum_column(NotificationType, "notification_type"),
         nullable=False,
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -9,10 +9,12 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from union_ledger.api.deps.auth import get_current_user, require_roles
 from union_ledger.core.config import get_settings
 from union_ledger.db.session import get_db_session
 from union_ledger.models.entities import Evidence, Settlement
-from union_ledger.models.enums import EvidenceStatus, EvidenceType
+from union_ledger.models.enums import EvidenceStatus, EvidenceType, RoleType
+from union_ledger.schemas.auth import AuthUser
 from union_ledger.schemas.evidence import (
     EvidenceResponse,
     EvidenceUpdateRequest,
@@ -37,7 +39,12 @@ DbSession = Annotated[AsyncSession, Depends(get_db_session)]
 async def preview_evidence_extraction(
     evidence_type: Annotated[EvidenceType, Form()],
     file: Annotated[UploadFile, File()],
+    current_user: Annotated[
+        AuthUser,
+        Depends(require_roles(RoleType.TREASURER, RoleType.ADMIN)),
+    ],
 ) -> OCRPreviewResponse:
+    del current_user
     filename = LocalFileStorage.validate_filename(file.filename or "upload.bin")
     content = await file.read()
     if not content:
@@ -84,7 +91,12 @@ async def upload_evidence(
     evidence_type: Annotated[EvidenceType, Form()],
     file: Annotated[UploadFile, File()],
     session: DbSession,
+    current_user: Annotated[
+        AuthUser,
+        Depends(require_roles(RoleType.TREASURER, RoleType.ADMIN)),
+    ],
 ) -> EvidenceResponse:
+    del current_user
     settlement = await session.get(Settlement, settlement_id)
     if settlement is None:
         raise HTTPException(
@@ -127,7 +139,9 @@ async def upload_evidence(
 async def list_evidences(
     settlement_id: uuid.UUID,
     session: DbSession,
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> list[EvidenceResponse]:
+    del current_user
     result = await session.scalars(
         select(Evidence)
         .where(Evidence.settlement_id == settlement_id)
@@ -144,7 +158,9 @@ async def list_evidences(
 async def get_evidence(
     evidence_id: uuid.UUID,
     session: DbSession,
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> EvidenceResponse:
+    del current_user
     evidence = await _get_evidence_or_404(session, evidence_id)
     return EvidenceResponse.model_validate(evidence)
 
@@ -157,7 +173,12 @@ async def get_evidence(
 async def extract_evidence(
     evidence_id: uuid.UUID,
     session: DbSession,
+    current_user: Annotated[
+        AuthUser,
+        Depends(require_roles(RoleType.TREASURER, RoleType.ADMIN)),
+    ],
 ) -> EvidenceResponse:
+    del current_user
     evidence = await _get_evidence_or_404(session, evidence_id)
     evidence.status = EvidenceStatus.EXTRACTING
     await session.commit()
@@ -207,7 +228,12 @@ async def update_evidence(
     evidence_id: uuid.UUID,
     payload: EvidenceUpdateRequest,
     session: DbSession,
+    current_user: Annotated[
+        AuthUser,
+        Depends(require_roles(RoleType.TREASURER, RoleType.ADMIN)),
+    ],
 ) -> EvidenceResponse:
+    del current_user
     evidence = await _get_evidence_or_404(session, evidence_id)
 
     if "evidence_date" in payload.model_fields_set:

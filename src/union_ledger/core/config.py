@@ -13,6 +13,24 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+asyncpg://union_ledger:union_ledger@localhost:5432/union_ledger"
     )
+    jwt_secret_key: str = Field(
+        default="change-me-in-env",
+        validation_alias="JWT_SECRET_KEY",
+    )
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 30
+    email_verification_code_expire_minutes: int = 5
+    email_verification_verified_expire_minutes: int = 30
+    smtp_enabled: bool = False
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_email: str | None = None
+    smtp_from_name: str = "Union Ledger"
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
+    smtp_timeout_seconds: int = 15
     storage_root: Path = Path("storage")
     ocr_engine: str = "paddleocr"
     ocr_mode: str = "local"  # "local" = CPU PaddleOCR, "modal" = Modal GPU Worker
@@ -43,6 +61,14 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return Path(value)
         return Path("storage")
+
+    @field_validator("smtp_use_ssl")
+    @classmethod
+    def validate_smtp_ssl_with_tls(cls, value: bool, info):
+        smtp_use_tls = bool(info.data.get("smtp_use_tls", True))
+        if value and smtp_use_tls:
+            raise ValueError("SMTP_USE_SSL and SMTP_USE_TLS cannot both be true")
+        return value
 
     model_config = SettingsConfigDict(
         env_file=".env",
