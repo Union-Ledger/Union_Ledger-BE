@@ -34,6 +34,14 @@ alembic upgrade head
 uvicorn union_ledger.main:app --reload
 ```
 
+```cd /Users/gyuun/Documents/project/Union_Ledger-BE
+source .venv/bin/activate
+pip install -e '.[dev]'   # 처음 1회만(또는 의존성 바뀔 때)
+alembic upgrade head
+uvicorn union_ledger.main:app --reload
+mac용 실행법
+```
+
 ## Project Structure
 
 - `src/union_ledger`: FastAPI 앱과 도메인 모델
