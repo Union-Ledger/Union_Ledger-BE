@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -17,31 +17,36 @@ from union_ledger.schemas.auth_response import AuthUser
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    session: AsyncSession = Depends(get_db_session),
-) -> AuthUser:
-    credentials_exception = HTTPException(
+def _credentials_error() -> HTTPException:
+    return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="인증 정보가 유효하지 않습니다.",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
-    if credentials is None or credentials.scheme.lower() != "bearer":
-        raise credentials_exception
 
+async def _resolve_user_id(credentials: HTTPAuthorizationCredentials | None) -> uuid.UUID:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise _credentials_error()
     try:
         payload = decode_access_token(credentials.credentials)
         subject = payload.get("sub")
         if subject is None:
-            raise credentials_exception
-        user_id = uuid.UUID(subject)
-    except (ValueError, TypeError):
-        raise credentials_exception
+            raise _credentials_error()
+        return uuid.UUID(subject)
+    except (ValueError, TypeError) as exc:
+        raise _credentials_error() from exc
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    session: AsyncSession = Depends(get_db_session),
+) -> AuthUser:
+    user_id = await _resolve_user_id(credentials)
 
     user = await session.get(User, user_id)
     if user is None or not user.is_active:
-        raise credentials_exception
+        raise _credentials_error()
 
     roles_result = await session.scalars(
         select(OrganizationMembership.role).where(OrganizationMembership.user_id == user.id)
@@ -70,4 +75,58 @@ class RoleChecker:
 
 
 def require_roles(*allowed_roles: RoleType) -> RoleChecker:
+    """Global role gate. A user with role R in *any* organization passes.
+
+    Use this only for org-agnostic actions. For anything scoped to a specific
+    organization (members list, invitations, settlements), use
+    `require_roles_in_org` — otherwise an Admin of org A would slip through
+    gates on org B's resources.
+    """
     return RoleChecker(allowed_roles)
+
+
+def require_roles_in_org(
+    *allowed_roles: RoleType,
+) -> Callable[..., OrganizationMembership]:
+    """Organization-scoped role gate.
+
+    Uses the `organization_id` path parameter to look up the caller's
+    membership in *that* organization, and requires the membership's role to
+    match one of `allowed_roles` (or, if `allowed_roles` is empty, any
+    membership). Returns the matching `OrganizationMembership` so callers can
+    reuse it (e.g. role transfers need the caller's current role).
+    """
+    allowed_set = set(allowed_roles)
+
+    async def _checker(
+        organization_id: uuid.UUID,
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+        session: AsyncSession = Depends(get_db_session),
+    ) -> OrganizationMembership:
+        user_id = await _resolve_user_id(credentials)
+        user = await session.get(User, user_id)
+        if user is None or not user.is_active:
+            raise _credentials_error()
+
+        memberships = (
+            await session.scalars(
+                select(OrganizationMembership).where(
+                    OrganizationMembership.organization_id == organization_id,
+                    OrganizationMembership.user_id == user_id,
+                )
+            )
+        ).all()
+        if not memberships:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="조직 접근 권한이 없습니다.",
+            )
+        for membership in memberships:
+            if not allowed_set or membership.role in allowed_set:
+                return membership
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="이 작업을 수행할 역할이 없습니다.",
+        )
+
+    return _checker

@@ -4,7 +4,17 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Date,
+    Enum,
+    ForeignKey,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -24,6 +34,10 @@ from union_ledger.models.enums import (
     RoleType,
     SettlementStatus,
 )
+
+# Postgres-native JSONB for production; fall back to generic JSON on sqlite
+# so the in-memory aiosqlite test engine can still compile DDL.
+_JSON_COLUMN = JSONB().with_variant(JSON(), "sqlite")
 
 
 def _enum_column(enum_cls: type, name: str) -> Enum:
@@ -113,7 +127,7 @@ class SettlementTemplate(TimestampedUUIDModel):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str] = mapped_column(String(512), nullable=False)
-    mapping_schema: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    mapping_schema: Mapped[dict] = mapped_column(_JSON_COLUMN, default=dict, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     organization: Mapped[Organization] = relationship(back_populates="templates")
@@ -175,7 +189,7 @@ class Evidence(TimestampedUUIDModel):
     )
     source_file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     source_file_path: Mapped[str] = mapped_column(String(512), nullable=False)
-    extracted_payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    extracted_payload: Mapped[dict] = mapped_column(_JSON_COLUMN, default=dict, nullable=False)
     evidence_date: Mapped[date | None] = mapped_column(Date)
     merchant_name: Mapped[str | None] = mapped_column(String(255))
     amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))

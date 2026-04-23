@@ -1,0 +1,181 @@
+"""Shared test fixtures.
+
+Goals:
+- Run each test against a fresh in-memory aiosqlite database so the suite
+  stays fast and isolated.
+- Make the teammate's auth flow (send-code → verify-email → signup) ergonomic
+  inside tests: `debug_code` is exposed only when `settings.debug=True`, and
+  the real SMTP call is replaced with a no-op so tests don't need a mail
+  server.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import AsyncIterator
+
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import StaticPool
+
+# --- Settings overrides ---------------------------------------------------
+# `get_settings()` is @lru_cache'd, and many modules call it at import time.
+# We set env vars *before* importing the app, then clear the cache on every
+# test so each run observes them. `JWT_SECRET_KEY` is set to a stable dummy
+# value; the default "change-me-in-env" works too but being explicit makes
+# debugging failures easier.
+os.environ.setdefault("DEBUG", "true")
+os.environ.setdefault("SMTP_ENABLED", "false")
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-do-not-use-in-prod-32chars-min")
+
+from union_ledger.core.config import get_settings  # noqa: E402
+from union_ledger.db.session import get_db_session  # noqa: E402
+from union_ledger.main import app  # noqa: E402
+from union_ledger.models.base import Base  # noqa: E402
+
+get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _stub_smtp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the real SMTP send with a no-op for every test.
+
+    The auth router imports `send_verification_email` by name into its own
+    module namespace, so patching the function at `services.email_sender`
+    wouldn't take effect — we patch the attribute on the endpoint module
+    directly.
+    """
+    from union_ledger.api.v1.endpoints import auth as auth_ep
+
+    def _noop(recipient: str, code: str, expires_in_seconds: int) -> None:
+        return None
+
+    monkeypatch.setattr(auth_ep, "send_verification_email", _noop)
+
+
+@pytest_asyncio.fixture
+async def db_engine() -> AsyncIterator[AsyncEngine]:
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_sessionmaker(
+    db_engine: AsyncEngine,
+) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+
+
+@pytest_asyncio.fixture
+async def client(
+    db_sessionmaker: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncClient]:
+    async def override_get_db() -> AsyncIterator[AsyncSession]:
+        async with db_sessionmaker() as session:
+            yield session
+
+    app.dependency_overrides[get_db_session] = override_get_db
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as c:
+            yield c
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+
+# --- Helpers --------------------------------------------------------------
+
+DEFAULT_PASSWORD = "TestPass123!"
+DEFAULT_COLLEGE = "공과대학"
+DEFAULT_DEPARTMENT = "컴퓨터공학부"
+
+
+async def signup(
+    client: AsyncClient,
+    *,
+    email: str,
+    password: str = DEFAULT_PASSWORD,
+    name: str = "홍길동",
+    college_name: str = DEFAULT_COLLEGE,
+    department_name: str = DEFAULT_DEPARTMENT,
+    invitation_code: str | None = None,
+) -> str:
+    """Full signup path (send-code → verify-email → signup). Returns access_token.
+
+    Relies on `DEBUG=true` so `debug_code` is included in the send-code
+    response. `_stub_smtp` keeps the email send from hitting the network.
+    """
+    send = await client.post(
+        "/api/v1/auth/send-verification-code",
+        json={"email": email},
+    )
+    assert send.status_code == 200, send.text
+    code = send.json()["debug_code"]
+    assert code, "debug build should expose debug_code"
+
+    verify = await client.post(
+        "/api/v1/auth/verify-email",
+        json={"email": email, "code": code},
+    )
+    assert verify.status_code == 200, verify.text
+
+    payload = {
+        "name": name,
+        "email": email,
+        "password": password,
+        "password_confirm": password,
+        "college_name": college_name,
+        "department_name": department_name,
+    }
+    if invitation_code is not None:
+        payload["invitation_code"] = invitation_code
+
+    signup_resp = await client.post("/api/v1/auth/signup", json=payload)
+    assert signup_resp.status_code == 200, signup_resp.text
+    return signup_resp.json()["access_token"]
+
+
+async def login_access_token(
+    client: AsyncClient,
+    *,
+    email: str,
+    password: str = DEFAULT_PASSWORD,
+) -> str:
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": password},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["access_token"]
+
+
+def bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def auth_headers(
+    client: AsyncClient,
+    email: str,
+    password: str = DEFAULT_PASSWORD,
+) -> dict[str, str]:
+    token = await login_access_token(client, email=email, password=password)
+    return bearer(token)
