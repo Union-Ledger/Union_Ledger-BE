@@ -85,6 +85,47 @@ def require_roles(*allowed_roles: RoleType) -> RoleChecker:
     return RoleChecker(allowed_roles)
 
 
+async def require_membership_for_org(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    allowed_roles: set[RoleType] | None = None,
+) -> OrganizationMembership:
+    """Inline org-membership guard for routes that don't carry org_id in the path.
+
+    Use this from item-level endpoints (e.g. `/settlements/{id}`) where the
+    org id has to be resolved from the loaded resource rather than the URL.
+    For collection routes that *do* have `{organization_id}` in the path, use
+    the `require_roles_in_org` dependency factory instead.
+
+    Pass `allowed_roles=None` (default) to accept any membership; pass a set
+    of `RoleType` to additionally require a specific role.
+    """
+    memberships = (
+        await session.scalars(
+            select(OrganizationMembership).where(
+                OrganizationMembership.organization_id == organization_id,
+                OrganizationMembership.user_id == user_id,
+            )
+        )
+    ).all()
+    if not memberships:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="조직 접근 권한이 없습니다.",
+        )
+    if not allowed_roles:
+        return memberships[0]
+    for membership in memberships:
+        if membership.role in allowed_roles:
+            return membership
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="이 작업을 수행할 역할이 없습니다.",
+    )
+
+
 def require_roles_in_org(
     *allowed_roles: RoleType,
 ) -> Callable[..., OrganizationMembership]:

@@ -17,6 +17,8 @@ build/
 *.egg-info/
 uploads/
 storage/tessdata/
+storage/evidences/
+storage/settlement_templates/
 samples/receipts/**/*.png
 samples/receipts/**/*.jpg
 samples/receipts/**/*.jpeg

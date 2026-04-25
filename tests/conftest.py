@@ -179,3 +179,30 @@ async def auth_headers(
 ) -> dict[str, str]:
     token = await login_access_token(client, email=email, password=password)
     return bearer(token)
+
+
+async def create_org_as_admin(
+    client: AsyncClient,
+    headers: dict[str, str],
+    *,
+    name: str = "총학생회",
+    college_name: str = DEFAULT_COLLEGE,
+    department_name: str = DEFAULT_DEPARTMENT,
+) -> dict:
+    """POST /organizations as the caller; the caller becomes Admin of the new org.
+
+    Returns the org JSON. Used by tests that need Treasurer/Admin perms in a
+    specific org (separate from the STUDENT-role signup-org auto-created by
+    teammate's signup endpoint).
+    """
+    resp = await client.post(
+        "/api/v1/organizations",
+        headers=headers,
+        json={
+            "name": name,
+            "college_name": college_name,
+            "department_name": department_name,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
