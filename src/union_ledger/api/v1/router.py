@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from union_ledger.api.v1.endpoints.audit import router as audit_router
 from union_ledger.api.v1.endpoints.auth import router as auth_router
 from union_ledger.api.v1.endpoints.evidences import router as evidences_router
 from union_ledger.api.v1.endpoints.health import router as health_router
@@ -19,4 +20,5 @@ router.include_router(organizations_router)
 router.include_router(invitations_router)
 router.include_router(settlement_templates_router)
 router.include_router(settlements_router)
+router.include_router(audit_router)
 router.include_router(evidences_router)

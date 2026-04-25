@@ -181,6 +181,76 @@ async def auth_headers(
     return bearer(token)
 
 
+async def add_auditor_to_org(
+    client: AsyncClient,
+    *,
+    org_id: str,
+    admin_headers: dict[str, str],
+    auditor_email: str,
+) -> dict[str, str]:
+    """Issue an auditor invite, sign up the auditor user, and accept it.
+
+    Returns the auditor's bearer auth headers. The auditor will hold:
+      - STUDENT in their auto-created signup-org (irrelevant here)
+      - AUDITOR in `org_id`
+    """
+    issue = await client.post(
+        f"/api/v1/organizations/{org_id}/invitations",
+        headers=admin_headers,
+        json={
+            "invitation_type": "auditor_invite",
+            "invited_email": auditor_email,
+            "role": "auditor",
+        },
+    )
+    assert issue.status_code == 201, issue.text
+    code = issue.json()["code"]
+
+    await signup(client, email=auditor_email, name="감사위원")
+    auditor_headers = await auth_headers(client, auditor_email)
+
+    accept = await client.post(
+        "/api/v1/invitations/accept",
+        headers=auditor_headers,
+        json={"code": code},
+    )
+    assert accept.status_code == 200, accept.text
+
+    # Re-issue token so memberships reflect the new role.
+    return await auth_headers(client, auditor_email)
+
+
+async def add_treasurer_to_org(
+    client: AsyncClient,
+    *,
+    org_id: str,
+    admin_headers: dict[str, str],
+    treasurer_email: str,
+) -> dict[str, str]:
+    """Mirror of `add_auditor_to_org` for the TREASURER role."""
+    issue = await client.post(
+        f"/api/v1/organizations/{org_id}/invitations",
+        headers=admin_headers,
+        json={
+            "invitation_type": "treasurer_invite",
+            "invited_email": treasurer_email,
+            "role": "treasurer",
+        },
+    )
+    assert issue.status_code == 201, issue.text
+    code = issue.json()["code"]
+
+    await signup(client, email=treasurer_email, name="재정담당")
+    treasurer_headers = await auth_headers(client, treasurer_email)
+    accept = await client.post(
+        "/api/v1/invitations/accept",
+        headers=treasurer_headers,
+        json={"code": code},
+    )
+    assert accept.status_code == 200, accept.text
+    return await auth_headers(client, treasurer_email)
+
+
 async def create_org_as_admin(
     client: AsyncClient,
     headers: dict[str, str],
