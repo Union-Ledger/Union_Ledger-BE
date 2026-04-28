@@ -19,6 +19,8 @@ uploads/
 storage/tessdata/
 storage/evidences/
 storage/settlement_templates/
+storage/bank_statements/
+storage/artifacts/
 samples/receipts/**/*.png
 samples/receipts/**/*.jpg
 samples/receipts/**/*.jpeg
