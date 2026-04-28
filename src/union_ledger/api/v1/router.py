@@ -6,6 +6,7 @@ from union_ledger.api.v1.endpoints.bank_statements import router as bank_stateme
 from union_ledger.api.v1.endpoints.evidences import router as evidences_router
 from union_ledger.api.v1.endpoints.health import router as health_router
 from union_ledger.api.v1.endpoints.invitations import router as invitations_router
+from union_ledger.api.v1.endpoints.notifications import router as notifications_router
 from union_ledger.api.v1.endpoints.organizations import router as organizations_router
 from union_ledger.api.v1.endpoints.reconciliation import router as reconciliation_router
 from union_ledger.api.v1.endpoints.settlement_templates import (
@@ -26,3 +27,4 @@ router.include_router(audit_router)
 router.include_router(evidences_router)
 router.include_router(bank_statements_router)
 router.include_router(reconciliation_router)
+router.include_router(notifications_router)

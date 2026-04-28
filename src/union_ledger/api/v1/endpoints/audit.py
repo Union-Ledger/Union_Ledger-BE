@@ -38,6 +38,13 @@ from union_ledger.services.audit_comment import (
     create_comment,
     list_comments,
 )
+from union_ledger.services.notification import (
+    notify_audit_approved,
+    notify_audit_rejected,
+    notify_settlement_published,
+    notify_settlement_resubmitted,
+    notify_settlement_submitted,
+)
 from union_ledger.services.settlement import (
     SettlementNotFound,
     get_settlement_or_raise,
@@ -126,6 +133,9 @@ async def submit(
         settlement = await submit_settlement(session, settlement=settlement)
     except IllegalStatusTransition as exc:
         raise _bad_transition(exc) from exc
+    await notify_settlement_submitted(
+        session, settlement=settlement, actor_user_id=current_user.id
+    )
     return SettlementResponse.model_validate(settlement)
 
 
@@ -156,6 +166,9 @@ async def resubmit(
         settlement=settlement,
         author_membership_id=membership.id,
         comment=payload.comment,
+    )
+    await notify_settlement_resubmitted(
+        session, settlement=settlement, actor_user_id=current_user.id
     )
     return SettlementResponse.model_validate(settlement)
 
@@ -191,6 +204,9 @@ async def approve(
         author_membership_id=membership.id,
         comment=payload.comment,
     )
+    await notify_audit_approved(
+        session, settlement=settlement, actor_user_id=current_user.id
+    )
     return SettlementResponse.model_validate(settlement)
 
 
@@ -222,6 +238,9 @@ async def reject(
         author_membership_id=membership.id,
         comment=payload.comment,
     )
+    await notify_audit_rejected(
+        session, settlement=settlement, actor_user_id=current_user.id
+    )
     return SettlementResponse.model_validate(settlement)
 
 
@@ -249,6 +268,9 @@ async def publish(
         settlement = await publish_settlement(session, settlement=settlement)
     except IllegalStatusTransition as exc:
         raise _bad_transition(exc) from exc
+    await notify_settlement_published(
+        session, settlement=settlement, actor_user_id=current_user.id
+    )
     return SettlementResponse.model_validate(settlement)
 
 
