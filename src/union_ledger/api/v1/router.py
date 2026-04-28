@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from union_ledger.api.v1.endpoints.audit import router as audit_router
+from union_ledger.api.v1.endpoints.audit_workflow import router as audit_workflow_router
 from union_ledger.api.v1.endpoints.auth import router as auth_router
 from union_ledger.api.v1.endpoints.bank_statements import router as bank_statements_router
 from union_ledger.api.v1.endpoints.evidences import router as evidences_router
@@ -24,6 +25,7 @@ router.include_router(invitations_router)
 router.include_router(settlement_templates_router)
 router.include_router(settlements_router)
 router.include_router(audit_router)
+router.include_router(audit_workflow_router)
 router.include_router(evidences_router)
 router.include_router(bank_statements_router)
 router.include_router(reconciliation_router)
