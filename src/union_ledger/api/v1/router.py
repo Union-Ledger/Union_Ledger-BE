@@ -5,6 +5,7 @@ from union_ledger.api.v1.endpoints.audit import router as audit_router
 from union_ledger.api.v1.endpoints.audit_workflow import router as audit_workflow_router
 from union_ledger.api.v1.endpoints.auth import router as auth_router
 from union_ledger.api.v1.endpoints.bank_statements import router as bank_statements_router
+from union_ledger.api.v1.endpoints.dashboard import router as dashboard_router
 from union_ledger.api.v1.endpoints.evidences import router as evidences_router
 from union_ledger.api.v1.endpoints.health import router as health_router
 from union_ledger.api.v1.endpoints.invitations import router as invitations_router
@@ -34,3 +35,4 @@ router.include_router(reconciliation_router)
 router.include_router(notifications_router)
 router.include_router(artifacts_router)
 router.include_router(public_router)
+router.include_router(dashboard_router)
