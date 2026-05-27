@@ -80,23 +80,6 @@ async def test_upload_template_default_empty_mapping(client: AsyncClient) -> Non
     assert template["mapping_schema"] == {}
 
 
-async def test_upload_template_rejects_student(client: AsyncClient) -> None:
-    """Student in the auto-created signup org can't upload templates there."""
-    await signup(client, email="t_student@konkuk.ac.kr")
-    headers = await auth_headers(client, "t_student@konkuk.ac.kr")
-    list_resp = await client.get("/api/v1/organizations", headers=headers)
-    signup_org_id = list_resp.json()[0]["id"]
-
-    files = {"file": ("template.xlsx", io.BytesIO(DUMMY_XLSX))}
-    resp = await client.post(
-        f"/api/v1/organizations/{signup_org_id}/templates",
-        headers=headers,
-        files=files,
-        data={"name": "x"},
-    )
-    assert resp.status_code == 403, resp.text
-
-
 async def test_upload_template_rejects_non_excel(client: AsyncClient) -> None:
     await signup(client, email="t_pdf@konkuk.ac.kr")
     headers = await auth_headers(client, "t_pdf@konkuk.ac.kr")

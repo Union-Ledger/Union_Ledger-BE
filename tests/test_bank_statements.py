@@ -185,7 +185,8 @@ async def test_upload_unrecognized_header_returns_422(client: AsyncClient) -> No
 
 
 async def test_upload_requires_treasurer_or_admin(client: AsyncClient) -> None:
-    """A STUDENT-only member can't upload bank statements."""
+    """A non-member of the target org can't upload bank statements (being
+    ADMIN of their own signup-org doesn't grant cross-org perms)."""
     await signup(client, email="bs_owner@konkuk.ac.kr")
     owner_headers = await auth_headers(client, "bs_owner@konkuk.ac.kr")
     org = await create_org_as_admin(client, owner_headers)

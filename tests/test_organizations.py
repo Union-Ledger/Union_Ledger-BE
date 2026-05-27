@@ -7,8 +7,8 @@ Covers the slice on top of teammate's auth:
   GET    /organizations/{id}/members — Admin-only
 
 Note: teammate's `/auth/signup` already auto-creates a "signup org" with the
-user as STUDENT. Tests here create *additional* orgs via `POST /organizations`
-so the caller ends up holding both memberships.
+user as ADMIN. Tests here create *additional* orgs via `POST /organizations`
+so the caller ends up holding multiple admin memberships.
 """
 
 from __future__ import annotations
@@ -59,12 +59,12 @@ async def test_create_organization_caller_becomes_admin(client: AsyncClient) -> 
     assert org["name"] == "컴공 학생회"
     assert org["college_name"] == "공과대학"
 
-    # /me should now report both the signup org's `student` role and the new
-    # org's `admin` role.
+    # Both the signup-org and the new org grant ADMIN — distinct role values
+    # are deduped, so /me returns just {"admin"}.
     me = await client.get("/api/v1/auth/me", headers=headers)
     assert me.status_code == 200
     roles = set(me.json()["roles"])
-    assert {"student", "admin"}.issubset(roles)
+    assert roles == {"admin"}
 
 
 async def test_create_organization_rejects_blank_fields(client: AsyncClient) -> None:

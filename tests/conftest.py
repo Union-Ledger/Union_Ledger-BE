@@ -191,7 +191,7 @@ async def add_auditor_to_org(
     """Issue an auditor invite, sign up the auditor user, and accept it.
 
     Returns the auditor's bearer auth headers. The auditor will hold:
-      - STUDENT in their auto-created signup-org (irrelevant here)
+      - ADMIN in their auto-created signup-org (irrelevant here)
       - AUDITOR in `org_id`
     """
     issue = await client.post(
@@ -261,9 +261,9 @@ async def create_org_as_admin(
 ) -> dict:
     """POST /organizations as the caller; the caller becomes Admin of the new org.
 
-    Returns the org JSON. Used by tests that need Treasurer/Admin perms in a
-    specific org (separate from the STUDENT-role signup-org auto-created by
-    teammate's signup endpoint).
+    Returns the org JSON. Used by tests that need a deterministic, named org
+    separate from the auto-created signup-org (where the user is already
+    ADMIN by default after teammate's signup endpoint).
     """
     resp = await client.post(
         "/api/v1/organizations",

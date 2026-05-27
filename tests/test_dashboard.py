@@ -81,32 +81,16 @@ async def _seed_evidence(
 # --- Treasurer dashboard ------------------------------------------------
 
 
-async def test_treasurer_dashboard_empty_for_student_only_user(
-    client: AsyncClient,
-) -> None:
-    """A fresh signup gets STUDENT (not TREASURER/ADMIN) in their signup-org,
-    so the treasurer dashboard is empty until they create / are invited to
-    a real org."""
-    await signup(client, email="dash_t_empty@konkuk.ac.kr")
-    headers = await auth_headers(client, "dash_t_empty@konkuk.ac.kr")
-    resp = await client.get("/api/v1/dashboard/treasurer", headers=headers)
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["organization_count"] == 0
-    assert body["total_evidence_count"] == 0
-    assert body["recent_settlements"] == []
-    assert body["progress_percent"] == 0.0
-
-
 async def test_treasurer_dashboard_includes_admin_org(client: AsyncClient) -> None:
-    """Creating an org via POST /organizations makes the caller ADMIN of it,
-    which is one of the treasurer-dashboard roles."""
+    """ADMIN-role memberships are counted toward the treasurer dashboard.
+    A fresh signup is already ADMIN of the auto-created signup-org, and
+    POST /organizations adds a second ADMIN membership → count == 2."""
     await signup(client, email="dash_t_admin@konkuk.ac.kr")
     headers = await auth_headers(client, "dash_t_admin@konkuk.ac.kr")
     await create_org_as_admin(client, headers)
     resp = await client.get("/api/v1/dashboard/treasurer", headers=headers)
     assert resp.status_code == 200
-    assert resp.json()["organization_count"] == 1
+    assert resp.json()["organization_count"] == 2
 
 
 async def test_treasurer_dashboard_aggregates_across_settlements(

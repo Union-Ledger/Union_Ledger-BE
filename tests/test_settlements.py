@@ -1,9 +1,9 @@
 """Settlement endpoint tests (spec ④).
 
-Covers POST/GET/LIST/PATCH for settlements. Note: a freshly signed-up user is
-STUDENT in their auto-created "signup org" — to test Treasurer/Admin perms we
-explicitly create a *new* org via POST /organizations, which makes the caller
-Admin of that new org.
+Covers POST/GET/LIST/PATCH for settlements. A freshly signed-up user is ADMIN
+of their auto-created "signup org"; tests that need a fully isolated admin
+context still call POST /organizations to spin up a *new* org so fixtures
+don't contaminate each other.
 """
 
 from __future__ import annotations
@@ -60,29 +60,6 @@ async def test_create_settlement_as_admin(client: AsyncClient) -> None:
     assert settlement["organization_id"] == org["id"]
     assert settlement["title"] == "2026-1학기 정산"
     assert settlement["template_id"] is None
-
-
-async def test_create_settlement_rejects_student_in_signup_org(
-    client: AsyncClient,
-) -> None:
-    """A new signup is STUDENT of the auto-created signup-org. Students must
-    not be able to create settlements there."""
-    await signup(client, email="s_student@konkuk.ac.kr")
-    headers = await auth_headers(client, "s_student@konkuk.ac.kr")
-
-    # Find the user's signup org id by listing memberships from /me — we don't
-    # have a "list my orgs" endpoint that exposes the signup-org ID, but
-    # GET /organizations does.
-    list_resp = await client.get("/api/v1/organizations", headers=headers)
-    assert list_resp.status_code == 200
-    signup_org_id = list_resp.json()[0]["id"]
-
-    resp = await client.post(
-        f"/api/v1/organizations/{signup_org_id}/settlements",
-        headers=headers,
-        json={"title": "should fail", "academic_year": 2026, "semester": "1"},
-    )
-    assert resp.status_code == 403, resp.text
 
 
 async def test_create_settlement_rejects_non_member(client: AsyncClient) -> None:
@@ -244,9 +221,8 @@ async def test_patch_settlement_empty_body_returns_current_state(
 
 
 async def test_patch_settlement_rejects_non_treasurer(client: AsyncClient) -> None:
-    """Make a treasurer-only user (signup org STUDENT, separate org Admin) and
-    have a *third* user try to PATCH — the third user has no membership at
-    all in the org, so 403."""
+    """The third user has no membership at all in the target org, so 403 —
+    being ADMIN of their *own* signup-org doesn't grant cross-org perms."""
     await signup(client, email="s_p_owner@konkuk.ac.kr")
     owner_headers = await auth_headers(client, "s_p_owner@konkuk.ac.kr")
     org = await create_org_as_admin(client, owner_headers)

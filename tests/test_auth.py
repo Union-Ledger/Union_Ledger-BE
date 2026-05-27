@@ -102,8 +102,8 @@ async def test_signup_returns_access_token(client: AsyncClient) -> None:
     body = me.json()
     assert body["email"] == "happy.path@konkuk.ac.kr"
     assert body["name"] == "행복"
-    # Auto-created org membership grants STUDENT role by default.
-    assert "student" in body["roles"]
+    # No-invitation signup auto-creates the org with the user as ADMIN.
+    assert "admin" in body["roles"]
 
 
 async def test_signup_duplicate_email_conflicts(client: AsyncClient) -> None:
@@ -174,5 +174,5 @@ async def test_me_reflects_memberships(client: AsyncClient) -> None:
     me = await client.get("/api/v1/auth/me", headers=headers)
     assert me.status_code == 200
     body = me.json()
-    # Signup auto-creates an org with the user as STUDENT member.
-    assert body["roles"] == ["student"]
+    # Signup auto-creates an org with the user as ADMIN member.
+    assert body["roles"] == ["admin"]

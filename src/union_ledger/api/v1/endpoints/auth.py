@@ -189,6 +189,10 @@ async def sign_up(
         )
         session.add(organization)
         await session.flush()
+        # No invitation = bootstrap path: the signup user becomes ADMIN of the
+        # org they just created. Without this they would have no way to issue
+        # invitations or publish settlements, leaving the org with zero admins.
+        membership_role = RoleType.ADMIN
 
     membership = OrganizationMembership(
         organization_id=organization.id,

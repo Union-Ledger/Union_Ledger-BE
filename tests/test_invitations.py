@@ -395,8 +395,8 @@ async def test_role_transfer_hands_off_role(client: AsyncClient) -> None:
 
 
 async def test_role_transfer_requires_role_holder(client: AsyncClient) -> None:
-    # A plain student (from the signup-org) has no transferable role in
-    # another admin's org → 403.
+    # A user who's ADMIN of their *own* signup-org still has no membership in
+    # rt_admin's separate org → nothing to transfer there → 403.
     await signup(client, email="rt_admin@konkuk.ac.kr")
     admin_headers = await auth_headers(client, "rt_admin@konkuk.ac.kr")
     org = await _create_org(client, admin_headers)
