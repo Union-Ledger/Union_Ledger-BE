@@ -1,0 +1,38 @@
+# Production compose for EC2 (no source bind-mount, no --reload).
+# DATABASE_URL in .env must use host "postgres".
+# HTTPS: terminate TLS on the host (e.g. nginx → http://127.0.0.1:8000).
+
+services:
+  api:
+    build:
+      context: .
+    command: uvicorn union_ledger.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - app_storage:/app/storage
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: union_ledger
+      POSTGRES_USER: union_ledger
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-union_ledger}
+    volumes:
+      - union_ledger_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U union_ledger -d union_ledger"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  union_ledger_postgres:
+  app_storage:

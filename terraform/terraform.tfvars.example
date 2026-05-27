@@ -1,0 +1,10 @@
+aws_region       = "ap-northeast-2"
+project_name     = "union-ledger"
+instance_type    = "t3.small"
+key_name         = "my-keypair"          # AWS 콘솔에서 만든 키페어 이름
+allowed_ssh_cidr = "1.2.3.4/32"          # 본인 공인 IP/32 (https://ifconfig.me 등)
+allowed_api_cidr = "0.0.0.0/0"           # expose_api_port=true 일 때만 사용
+allowed_web_cidr = "0.0.0.0/0"           # nginx + Let's Encrypt (80, 443)
+expose_web_ports = true
+expose_api_port  = true                  # false면 8000 닫고 nginx(443)만 사용
+root_volume_gb   = 40

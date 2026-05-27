@@ -7,6 +7,18 @@ __pycache__/
 *.pyo
 *.pyd
 .env
+.env.production
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform.lock.hcl
+terraform/terraform.tfvars
+terraform/crash.log
+terraform/crash.*.log
+terraform/override.tf
+terraform/override.tf.json
+terraform/*_override.tf
+terraform/*_override.tf.json
 .coverage
 coverage.xml
 htmlcov/
@@ -30,3 +42,4 @@ samples/receipts/**/*.tiff
 samples/receipts/**/*.pdf
 samples/receipts/**/*.csv
 samples/receipts/reports/**/*.json
+terraform/tfplan

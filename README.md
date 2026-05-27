@@ -42,6 +42,24 @@ uvicorn union_ledger.main:app --reload
 mac용 실행법
 ```
 
+## EC2 배포 (Terraform + Amazon Linux)
+
+인프라: `terraform/` (EC2, 보안 그룹, Elastic IP)  
+코드 배포: `./scripts/deploy.sh` (rsync + `docker-compose.prod.yml`)
+
+```bash
+cd terraform && cp terraform.tfvars.example terraform.tfvars
+# key_name, allowed_ssh_cidr 수정 후
+terraform init && terraform apply
+
+cd ..
+cp .env.production.example .env   # JWT, POSTGRES_PASSWORD, ALLOWED_ORIGINS 수정
+export DEPLOY_KEY=~/.ssh/your-key.pem
+./scripts/deploy.sh
+```
+
+자세한 내용은 [terraform/README.md](terraform/README.md).
+
 ## Project Structure
 
 - `src/union_ledger`: FastAPI 앱과 도메인 모델
