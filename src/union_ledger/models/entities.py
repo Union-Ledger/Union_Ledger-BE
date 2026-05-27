@@ -8,6 +8,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     Date,
+    DateTime,
     Enum,
     ForeignKey,
     Numeric,
@@ -114,7 +115,7 @@ class Invitation(TimestampedUUIDModel):
         default=InvitationStatus.PENDING,
         nullable=False,
     )
-    expires_at: Mapped[datetime | None]
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class SettlementTemplate(TimestampedUUIDModel):
@@ -150,9 +151,9 @@ class Settlement(TimestampedUUIDModel):
         default=SettlementStatus.DRAFT,
         nullable=False,
     )
-    submitted_at: Mapped[datetime | None]
-    audited_at: Mapped[datetime | None]
-    published_at: Mapped[datetime | None]
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    audited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     organization: Mapped[Organization] = relationship(back_populates="settlements")
     template: Mapped[SettlementTemplate | None] = relationship(back_populates="settlements")
@@ -291,6 +292,6 @@ class Notification(TimestampedUUIDModel):
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
-    read_at: Mapped[datetime | None]
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     user: Mapped[User] = relationship(back_populates="notifications")
