@@ -11,13 +11,30 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from union_ledger.models.entities import Settlement, SettlementTemplate
+from union_ledger.models.entities import Evidence, Settlement, SettlementTemplate
 from union_ledger.models.enums import SettlementStatus
+
+
+@dataclass(slots=True, frozen=True)
+class CategoryBreakdown:
+    category: str | None
+    count: int
+    amount: Decimal
+
+
+@dataclass(slots=True, frozen=True)
+class SettlementExpenseSummary:
+    settlement_id: uuid.UUID
+    total_count: int
+    total_amount: Decimal
+    by_category: list[CategoryBreakdown]
 
 
 class SettlementError(Exception):
@@ -91,6 +108,52 @@ async def get_settlement_or_raise(
     if settlement is None:
         raise SettlementNotFound("결산안을 찾을 수 없습니다.")
     return settlement
+
+
+async def get_settlement_expense_summary(
+    session: AsyncSession,
+    *,
+    settlement: Settlement,
+) -> SettlementExpenseSummary:
+    """Aggregate the settlement's evidences into total + per-category rollup.
+
+    A single GROUP BY query — also covers the "no evidences yet" case (returns
+    empty list and zero totals). Amounts use `abs()` to match the dashboard's
+    convention of treating refunds as positive expense contributions; revisit
+    if/when we model refunds explicitly.
+    """
+    stmt = (
+        select(
+            Evidence.budget_category,
+            func.count(Evidence.id),
+            func.coalesce(func.sum(func.abs(Evidence.amount)), 0),
+        )
+        .where(Evidence.settlement_id == settlement.id)
+        .group_by(Evidence.budget_category)
+    )
+    result = await session.execute(stmt)
+
+    by_category = [
+        CategoryBreakdown(
+            category=category,
+            count=int(row_count),
+            amount=Decimal(str(row_sum)),
+        )
+        for category, row_count, row_sum in result.all()
+    ]
+    # Largest categories first; null/unclassified bucket sinks to the bottom
+    # so the FE list reads naturally even before users tag every evidence.
+    by_category.sort(key=lambda b: (b.category is None, -b.amount))
+
+    total_count = sum(b.count for b in by_category)
+    total_amount = sum((b.amount for b in by_category), Decimal(0))
+
+    return SettlementExpenseSummary(
+        settlement_id=settlement.id,
+        total_count=total_count,
+        total_amount=total_amount,
+        by_category=by_category,
+    )
 
 
 async def update_settlement(

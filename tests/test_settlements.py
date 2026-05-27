@@ -8,9 +8,43 @@ don't contaminate each other.
 
 from __future__ import annotations
 
+import uuid
+from datetime import date
+from decimal import Decimal
+
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from conftest import auth_headers, create_org_as_admin, signup
+from union_ledger.models.entities import Evidence
+from union_ledger.models.enums import EvidenceStatus, EvidenceType
+
+
+async def _seed_evidence(
+    db_sessionmaker: async_sessionmaker,
+    *,
+    settlement_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    amount: Decimal,
+    budget_category: str | None,
+    merchant: str = "테스트 상호",
+) -> None:
+    async with db_sessionmaker() as session:
+        ev = Evidence(
+            settlement_id=settlement_id,
+            organization_id=organization_id,
+            evidence_type=EvidenceType.PHYSICAL_RECEIPT,
+            status=EvidenceStatus.CONFIRMED,
+            source_file_name=f"{merchant}.png",
+            source_file_path=f"/tmp/{merchant}.png",
+            extracted_payload={},
+            evidence_date=date(2026, 3, 1),
+            merchant_name=merchant,
+            amount=amount,
+            budget_category=budget_category,
+        )
+        session.add(ev)
+        await session.commit()
 
 
 async def _create_settlement(
@@ -263,3 +297,175 @@ async def test_patch_settlement_invalid_semester_422(client: AsyncClient) -> Non
         json={"semester": "spring"},
     )
     assert resp.status_code == 422, resp.text
+
+
+# --- Expense summary -----------------------------------------------------
+
+
+async def test_expense_summary_empty_settlement(client: AsyncClient) -> None:
+    """A settlement with no evidences yet returns zero totals + empty list."""
+    await signup(client, email="es_empty@konkuk.ac.kr")
+    headers = await auth_headers(client, "es_empty@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+    s = await _create_settlement(client, headers, org_id=org["id"])
+
+    resp = await client.get(
+        f"/api/v1/settlements/{s['id']}/expense-summary",
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["settlement_id"] == s["id"]
+    assert body["total_count"] == 0
+    assert Decimal(body["total_amount"]) == Decimal(0)
+    assert body["by_category"] == []
+
+
+async def test_expense_summary_groups_by_category(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """Mix of categories — verify sums, counts, and descending-amount order."""
+    await signup(client, email="es_groups@konkuk.ac.kr")
+    headers = await auth_headers(client, "es_groups@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+    s = await _create_settlement(client, headers, org_id=org["id"])
+
+    # 행사비: 2건, 합 3,000,000
+    await _seed_evidence(
+        db_sessionmaker,
+        settlement_id=uuid.UUID(s["id"]),
+        organization_id=uuid.UUID(org["id"]),
+        amount=Decimal("1000000"),
+        budget_category="행사비",
+        merchant="행사1",
+    )
+    await _seed_evidence(
+        db_sessionmaker,
+        settlement_id=uuid.UUID(s["id"]),
+        organization_id=uuid.UUID(org["id"]),
+        amount=Decimal("2000000"),
+        budget_category="행사비",
+        merchant="행사2",
+    )
+    # 홍보비: 1건, 500,000
+    await _seed_evidence(
+        db_sessionmaker,
+        settlement_id=uuid.UUID(s["id"]),
+        organization_id=uuid.UUID(org["id"]),
+        amount=Decimal("500000"),
+        budget_category="홍보비",
+        merchant="홍보1",
+    )
+
+    resp = await client.get(
+        f"/api/v1/settlements/{s['id']}/expense-summary",
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total_count"] == 3
+    assert Decimal(body["total_amount"]) == Decimal("3500000")
+    # Sorted by amount desc.
+    assert [item["category"] for item in body["by_category"]] == ["행사비", "홍보비"]
+    assert body["by_category"][0]["count"] == 2
+    assert Decimal(body["by_category"][0]["amount"]) == Decimal("3000000")
+    assert body["by_category"][1]["count"] == 1
+    assert Decimal(body["by_category"][1]["amount"]) == Decimal("500000")
+
+
+async def test_expense_summary_null_category_sinks_to_bottom(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """Unclassified evidences (null budget_category) appear last regardless of
+    their amount — keeps the FE list readable while categories are being
+    filled in."""
+    await signup(client, email="es_null@konkuk.ac.kr")
+    headers = await auth_headers(client, "es_null@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+    s = await _create_settlement(client, headers, org_id=org["id"])
+
+    # Unclassified evidence has the LARGEST amount, but should still go last.
+    await _seed_evidence(
+        db_sessionmaker,
+        settlement_id=uuid.UUID(s["id"]),
+        organization_id=uuid.UUID(org["id"]),
+        amount=Decimal("9000000"),
+        budget_category=None,
+        merchant="미분류큰건",
+    )
+    await _seed_evidence(
+        db_sessionmaker,
+        settlement_id=uuid.UUID(s["id"]),
+        organization_id=uuid.UUID(org["id"]),
+        amount=Decimal("100000"),
+        budget_category="사무용품비",
+        merchant="볼펜",
+    )
+
+    resp = await client.get(
+        f"/api/v1/settlements/{s['id']}/expense-summary",
+        headers=headers,
+    )
+    body = resp.json()
+    categories = [item["category"] for item in body["by_category"]]
+    assert categories == ["사무용품비", None]
+
+
+async def test_expense_summary_uses_abs_for_amount(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """Negative amounts (refund-shaped) are summed via abs(), matching the
+    dashboard aggregation convention."""
+    await signup(client, email="es_abs@konkuk.ac.kr")
+    headers = await auth_headers(client, "es_abs@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+    s = await _create_settlement(client, headers, org_id=org["id"])
+
+    await _seed_evidence(
+        db_sessionmaker,
+        settlement_id=uuid.UUID(s["id"]),
+        organization_id=uuid.UUID(org["id"]),
+        amount=Decimal("-50000"),
+        budget_category="환불",
+        merchant="환불건",
+    )
+
+    resp = await client.get(
+        f"/api/v1/settlements/{s['id']}/expense-summary",
+        headers=headers,
+    )
+    body = resp.json()
+    assert Decimal(body["total_amount"]) == Decimal("50000")
+    assert Decimal(body["by_category"][0]["amount"]) == Decimal("50000")
+
+
+async def test_expense_summary_rejects_non_member(client: AsyncClient) -> None:
+    await signup(client, email="es_owner@konkuk.ac.kr")
+    owner_headers = await auth_headers(client, "es_owner@konkuk.ac.kr")
+    org = await create_org_as_admin(client, owner_headers)
+    s = await _create_settlement(client, owner_headers, org_id=org["id"])
+
+    await signup(client, email="es_outsider@konkuk.ac.kr")
+    out_headers = await auth_headers(client, "es_outsider@konkuk.ac.kr")
+    resp = await client.get(
+        f"/api/v1/settlements/{s['id']}/expense-summary",
+        headers=out_headers,
+    )
+    assert resp.status_code == 403, resp.text
+
+
+async def test_expense_summary_missing_settlement_404(client: AsyncClient) -> None:
+    await signup(client, email="es_404@konkuk.ac.kr")
+    headers = await auth_headers(client, "es_404@konkuk.ac.kr")
+    resp = await client.get(
+        f"/api/v1/settlements/{uuid.uuid4()}/expense-summary",
+        headers=headers,
+    )
+    assert resp.status_code == 404, resp.text
+
+
+async def test_expense_summary_requires_auth(client: AsyncClient) -> None:
+    resp = await client.get(
+        f"/api/v1/settlements/{uuid.uuid4()}/expense-summary",
+    )
+    assert resp.status_code == 401, resp.text

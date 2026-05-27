@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -63,3 +64,29 @@ class SettlementResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CategoryBreakdownItem(BaseModel):
+    """One row of the per-category expense rollup.
+
+    `category` is null when evidences haven't been classified yet — the FE
+    can render this group as "미분류" if it wants.
+    """
+
+    category: str | None
+    count: int
+    amount: Decimal
+
+
+class SettlementExpenseSummaryResponse(BaseModel):
+    """Aggregated expense view for the 결산안 생성 page.
+
+    Computed from the settlement's evidences. Amounts use `abs()` defensively
+    in case any refund-like negative values slipped in (matches the dashboard
+    aggregation convention).
+    """
+
+    settlement_id: uuid.UUID
+    total_count: int
+    total_amount: Decimal
+    by_category: list[CategoryBreakdownItem]
