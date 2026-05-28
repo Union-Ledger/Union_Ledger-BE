@@ -73,6 +73,29 @@ rsync -az --delete \
   --exclude '.env.example' \
   "${ROOT_DIR}/" "${SSH_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/"
 
+echo "==> Sync nginx site config (if changed) and reload"
+ssh "${SSH_OPTS[@]}" "${SSH_USER}@${DEPLOY_HOST}" bash -s <<'EOF'
+set -euo pipefail
+SRC="/opt/union-ledger/deploy/nginx/union-ledger.kro.kr.conf"
+DST="/etc/nginx/conf.d/union-ledger-api.conf"
+if [[ -f "$SRC" ]] && command -v nginx >/dev/null 2>&1; then
+  if ! sudo cmp -s "$SRC" "$DST"; then
+    echo "  nginx conf changed -> updating $DST"
+    sudo cp "$SRC" "$DST"
+    if sudo nginx -t; then
+      sudo systemctl reload nginx
+      echo "  nginx reloaded"
+    else
+      echo "  nginx -t failed; leaving previous config in place" >&2
+    fi
+  else
+    echo "  nginx conf unchanged"
+  fi
+else
+  echo "  skip: nginx not installed or template missing"
+fi
+EOF
+
 echo "==> Docker build & up"
 ssh "${SSH_OPTS[@]}" "${SSH_USER}@${DEPLOY_HOST}" bash -s <<EOF
 set -euo pipefail
