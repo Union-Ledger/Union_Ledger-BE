@@ -17,6 +17,7 @@ from union_ledger.api.v1.endpoints.settlement_templates import (
     router as settlement_templates_router,
 )
 from union_ledger.api.v1.endpoints.settlements import router as settlements_router
+from union_ledger.api.v1.endpoints.student import router as student_router
 from union_ledger.api.v1.endpoints.system import router as system_router
 
 router = APIRouter()
@@ -35,4 +36,5 @@ router.include_router(reconciliation_router)
 router.include_router(notifications_router)
 router.include_router(artifacts_router)
 router.include_router(public_router)
+router.include_router(student_router)
 router.include_router(dashboard_router)
