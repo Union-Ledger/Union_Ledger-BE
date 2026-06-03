@@ -24,6 +24,7 @@ coverage.xml
 htmlcov/
 .idea/
 .vscode/
+.DS_Store
 dist/
 build/
 *.egg-info/

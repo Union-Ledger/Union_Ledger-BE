@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -87,6 +87,16 @@ class SettlementExpenseSummaryResponse(BaseModel):
     """
 
     settlement_id: uuid.UUID
+    academic_year: int
+    semester: str
+    period_start: date | None = Field(
+        default=None,
+        description="1·2학기 고정 달력 시작일. summer/winter는 null.",
+    )
+    period_end: date | None = Field(
+        default=None,
+        description="1·2학기 고정 달력 종료일. 2학기는 학년도 다음 해 2월.",
+    )
     total_count: int
     total_amount: Decimal
     by_category: list[CategoryBreakdownItem]

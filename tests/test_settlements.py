@@ -316,9 +316,35 @@ async def test_expense_summary_empty_settlement(client: AsyncClient) -> None:
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["settlement_id"] == s["id"]
+    assert body["academic_year"] == 2026
+    assert body["semester"] == "1"
+    assert body["period_start"] == "2026-03-02"
+    assert body["period_end"] == "2026-06-22"
     assert body["total_count"] == 0
     assert Decimal(body["total_amount"]) == Decimal(0)
     assert body["by_category"] == []
+
+
+async def test_expense_summary_semester_2_period(client: AsyncClient) -> None:
+    await signup(client, email="es_sem2@konkuk.ac.kr")
+    headers = await auth_headers(client, "es_sem2@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+    s = await _create_settlement(
+        client,
+        headers,
+        org_id=org["id"],
+        academic_year=2024,
+        semester="2",
+    )
+
+    resp = await client.get(
+        f"/api/v1/settlements/{s['id']}/expense-summary",
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["period_start"] == "2024-09-01"
+    assert body["period_end"] == "2025-02-28"
 
 
 async def test_expense_summary_groups_by_category(

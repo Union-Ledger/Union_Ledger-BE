@@ -32,6 +32,7 @@ from union_ledger.schemas.settlement import (
     SettlementResponse,
     SettlementUpdateRequest,
 )
+from union_ledger.semester_period import resolve_semester_period
 from union_ledger.services.settlement import (
     SettlementNotEditable,
     SettlementNotFound,
@@ -162,8 +163,14 @@ async def get_settlement_expense_summary_endpoint(
         organization_id=settlement.organization_id,
     )
     summary = await get_settlement_expense_summary(session, settlement=settlement)
+    period = resolve_semester_period(settlement.academic_year, settlement.semester)
+    period_start, period_end = period if period is not None else (None, None)
     return SettlementExpenseSummaryResponse(
         settlement_id=summary.settlement_id,
+        academic_year=settlement.academic_year,
+        semester=settlement.semester,
+        period_start=period_start,
+        period_end=period_end,
         total_count=summary.total_count,
         total_amount=summary.total_amount,
         by_category=[
