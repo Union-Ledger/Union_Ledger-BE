@@ -154,6 +154,7 @@ class Settlement(TimestampedUUIDModel):
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     audited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    view_count: Mapped[int] = mapped_column(default=0, nullable=False)
 
     organization: Mapped[Organization] = relationship(back_populates="settlements")
     template: Mapped[SettlementTemplate | None] = relationship(back_populates="settlements")
