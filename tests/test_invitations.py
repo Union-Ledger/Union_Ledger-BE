@@ -407,3 +407,62 @@ async def test_role_transfer_requires_role_holder(client: AsyncClient) -> None:
         json={"successor_email": "ignored@konkuk.ac.kr"},
     )
     assert resp.status_code == 403, resp.text
+
+
+# --- In-app invite + accept (no manual code passing) ----------------------
+
+
+async def test_received_invitations_and_in_app_accept(client: AsyncClient) -> None:
+    """회장 invites by email; the invitee sees it in their in-app inbox and
+    accepts by id — no secret code is ever handed over."""
+    await signup(client, email="ia_admin@konkuk.ac.kr")
+    admin = await auth_headers(client, "ia_admin@konkuk.ac.kr")
+    org = await _create_org(client, admin, name="컴공 학생회")
+    await _issue_invite(
+        client, admin, org_id=org["id"], invited_email="ia_treas@konkuk.ac.kr"
+    )
+
+    # Invitee signs up as a plain student (no code), then checks their inbox.
+    await signup(client, email="ia_treas@konkuk.ac.kr")
+    treas = await auth_headers(client, "ia_treas@konkuk.ac.kr")
+    inbox = await client.get("/api/v1/invitations/me", headers=treas)
+    assert inbox.status_code == 200, inbox.text
+    items = inbox.json()
+    assert len(items) == 1
+    assert items[0]["role"] == "treasurer"
+    assert items[0]["organization_name"] == "컴공 학생회"
+    assert "code" not in items[0]  # the secret code is never exposed
+    invitation_id = items[0]["id"]
+
+    # Accept by id (no code) → role granted; /auth/me reflects it.
+    accept = await client.post(
+        f"/api/v1/invitations/{invitation_id}/accept", headers=treas
+    )
+    assert accept.status_code == 200, accept.text
+    me = await client.get("/api/v1/auth/me", headers=treas)
+    assert "treasurer" in me.json()["roles"]
+
+    # Once accepted it leaves the inbox.
+    inbox_after = await client.get("/api/v1/invitations/me", headers=treas)
+    assert inbox_after.json() == []
+
+
+async def test_in_app_accept_rejects_other_users_invite(client: AsyncClient) -> None:
+    await signup(client, email="ia_owner@konkuk.ac.kr")
+    admin = await auth_headers(client, "ia_owner@konkuk.ac.kr")
+    org = await _create_org(client, admin)
+    issued = await _issue_invite(
+        client, admin, org_id=org["id"], invited_email="intended@konkuk.ac.kr"
+    )
+    invitation_id = issued["id"]
+
+    # A different account (not the invited email) cannot accept it, and it
+    # never appears in their inbox.
+    await signup(client, email="intruder@konkuk.ac.kr")
+    intruder = await auth_headers(client, "intruder@konkuk.ac.kr")
+    resp = await client.post(
+        f"/api/v1/invitations/{invitation_id}/accept", headers=intruder
+    )
+    assert resp.status_code == 403, resp.text
+    inbox = await client.get("/api/v1/invitations/me", headers=intruder)
+    assert inbox.json() == []

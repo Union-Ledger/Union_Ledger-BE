@@ -4,17 +4,19 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from union_ledger.api.deps.auth import get_current_user, require_roles_in_org
 from union_ledger.db.session import get_db_session
-from union_ledger.models.entities import OrganizationMembership, User
+from union_ledger.models.entities import Organization, OrganizationMembership, User
 from union_ledger.models.enums import InvitationType, RoleType
 from union_ledger.schemas.auth_response import AuthUser
 from union_ledger.schemas.invitation import (
     InvitationAcceptRequest,
     InvitationCreateRequest,
     InvitationResponse,
+    ReceivedInvitationResponse,
     RoleTransferRequest,
 )
 from union_ledger.services.invitation import (
@@ -23,9 +25,11 @@ from union_ledger.services.invitation import (
     InvitationNotFound,
     MembershipAlreadyExists,
     accept_invitation,
+    accept_invitation_by_id,
     issue_invitation,
     issue_role_transfer,
     list_invitations,
+    list_received_invitations,
     revoke_invitation,
 )
 from union_ledger.services.organization import (
@@ -219,5 +223,87 @@ async def accept(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
+        ) from exc
+    return _to_response(result.invitation, include_code=False)
+
+
+@router.get(
+    "/invitations/me",
+    response_model=list[ReceivedInvitationResponse],
+    summary="내가 받은 초대 목록 (인앱 수락용)",
+)
+async def list_my_invitations(
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
+    session: DbSession,
+) -> list[ReceivedInvitationResponse]:
+    invitations = await list_received_invitations(session, email=current_user.email)
+    org_ids = {inv.organization_id for inv in invitations}
+    orgs: dict = {}
+    if org_ids:
+        rows = await session.scalars(
+            select(Organization).where(Organization.id.in_(org_ids))
+        )
+        orgs = {org.id: org for org in rows.all()}
+    return [
+        ReceivedInvitationResponse(
+            id=inv.id,
+            organization_id=inv.organization_id,
+            organization_name=orgs[inv.organization_id].name
+            if inv.organization_id in orgs
+            else None,
+            college_name=orgs[inv.organization_id].college_name
+            if inv.organization_id in orgs
+            else None,
+            department_name=orgs[inv.organization_id].department_name
+            if inv.organization_id in orgs
+            else None,
+            invitation_type=inv.invitation_type,
+            role=inv.role,
+            status=inv.status,
+            expires_at=inv.expires_at,
+            created_at=inv.created_at,
+        )
+        for inv in invitations
+    ]
+
+
+@router.post(
+    "/invitations/{invitation_id}/accept",
+    response_model=InvitationResponse,
+    summary="받은 초대 수락 (인앱, 코드 불필요)",
+)
+async def accept_my_invitation(
+    invitation_id: uuid.UUID,
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
+    session: DbSession,
+) -> InvitationResponse:
+    # The invitee accepts by invitation id from their received-invitations list;
+    # the org-membership gate is the email match inside the service.
+    user = await session.get(User, current_user.id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    try:
+        result = await accept_invitation_by_id(
+            session, invitation_id=invitation_id, user=user
+        )
+    except InvitationNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except InvitationNotAcceptable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    except InvitationEmailMismatch as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc
+    except MembershipAlreadyExists as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc
     return _to_response(result.invitation, include_code=False)

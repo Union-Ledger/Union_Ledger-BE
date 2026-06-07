@@ -130,16 +130,57 @@ async def revoke_invitation(
     return invitation
 
 
+async def list_received_invitations(
+    session: AsyncSession,
+    *,
+    email: str,
+) -> list[Invitation]:
+    """Pending invitations addressed to `email` — the invitee's in-app inbox."""
+    normalized = _normalize_email(email)
+    result = await session.scalars(
+        select(Invitation)
+        .where(
+            Invitation.invited_email == normalized,
+            Invitation.status == InvitationStatus.PENDING,
+        )
+        .order_by(Invitation.created_at.desc())
+    )
+    return list(result.all())
+
+
 async def accept_invitation(
     session: AsyncSession,
     *,
     code: str,
     user: User,
 ) -> AcceptedInvitation:
-    stmt = select(Invitation).where(Invitation.code == code)
-    invitation = await session.scalar(stmt)
+    """Accept by secret code (signup/legacy path)."""
+    invitation = await session.scalar(select(Invitation).where(Invitation.code == code))
     if invitation is None:
         raise InvitationNotFound("유효하지 않은 초대 코드입니다.")
+    return await _accept_loaded_invitation(session, invitation=invitation, user=user)
+
+
+async def accept_invitation_by_id(
+    session: AsyncSession,
+    *,
+    invitation_id: uuid.UUID,
+    user: User,
+) -> AcceptedInvitation:
+    """Accept by invitation id (in-app path — the invitee taps 수락 in their
+    received-invitations list; no secret code needs to be passed around)."""
+    invitation = await session.get(Invitation, invitation_id)
+    if invitation is None:
+        raise InvitationNotFound("초대를 찾을 수 없습니다.")
+    return await _accept_loaded_invitation(session, invitation=invitation, user=user)
+
+
+async def _accept_loaded_invitation(
+    session: AsyncSession,
+    *,
+    invitation: Invitation,
+    user: User,
+) -> AcceptedInvitation:
     if invitation.status != InvitationStatus.PENDING:
         raise InvitationNotAcceptable("이미 처리되었거나 만료된 초대입니다.")
 

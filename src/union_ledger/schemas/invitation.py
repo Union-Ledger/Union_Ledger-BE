@@ -55,6 +55,23 @@ class InvitationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ReceivedInvitationResponse(BaseModel):
+    """Invitee-facing view of a pending invitation. The invitee isn't a member
+    yet (so can't fetch the org separately) — carry the org identity inline.
+    The secret code is never exposed; acceptance is by invitation id."""
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    organization_name: str | None = None
+    college_name: str | None = None
+    department_name: str | None = None
+    invitation_type: InvitationType
+    role: RoleType
+    status: InvitationStatus
+    expires_at: datetime | None
+    created_at: datetime
+
+
 class InvitationAcceptRequest(BaseModel):
     code: str = Field(min_length=4, max_length=128)
 
