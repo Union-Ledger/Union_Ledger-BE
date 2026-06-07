@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import uuid
 from datetime import date
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
+from union_ledger.api.deps.auth import get_current_user
 from union_ledger.main import app
-from union_ledger.models.enums import EvidenceStatus, EvidenceType, ExtractionMethod, PaymentMethod
+from union_ledger.models.enums import (
+    EvidenceStatus,
+    EvidenceType,
+    ExtractionMethod,
+    PaymentMethod,
+    RoleType,
+)
+from union_ledger.schemas.auth_response import AuthUser
 from union_ledger.services.evidence_extraction import (
     EvidenceExtractionService,
     ExtractionResult,
@@ -284,11 +293,23 @@ def test_ocr_preview_endpoint_returns_structured_result(monkeypatch) -> None:
 
     monkeypatch.setattr(EvidenceExtractionService, "extract_upload", fake_extract_upload)
 
-    response = client.post(
-        "/api/v1/ocr/preview",
-        data={"evidence_type": "physical_receipt"},
-        files={"file": ("receipt.png", b"fake-image", "image/png")},
+    # /ocr/preview requires a treasurer/admin (OCR is expensive, so it isn't
+    # public). Override the auth dependency so this test exercises the response
+    # shape rather than the auth flow, which is covered by the auth tests.
+    app.dependency_overrides[get_current_user] = lambda: AuthUser(
+        id=uuid.uuid4(),
+        email="treasurer@konkuk.ac.kr",
+        name="재정담당",
+        roles=[RoleType.TREASURER],
     )
+    try:
+        response = client.post(
+            "/api/v1/ocr/preview",
+            data={"evidence_type": "physical_receipt"},
+            files={"file": ("receipt.png", b"fake-image", "image/png")},
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
 
     assert response.status_code == 200
     payload = response.json()

@@ -9,7 +9,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from union_ledger.api.deps.auth import get_current_user, require_roles
+from union_ledger.api.deps.auth import (
+    get_current_user,
+    require_membership_for_org,
+    require_roles,
+)
 from union_ledger.core.config import get_settings
 from union_ledger.db.session import get_db_session
 from union_ledger.models.entities import Evidence, Settlement
@@ -91,18 +95,20 @@ async def upload_evidence(
     evidence_type: Annotated[EvidenceType, Form()],
     file: Annotated[UploadFile, File()],
     session: DbSession,
-    current_user: Annotated[
-        AuthUser,
-        Depends(require_roles(RoleType.TREASURER, RoleType.ADMIN)),
-    ],
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> EvidenceResponse:
-    del current_user
     settlement = await session.get(Settlement, settlement_id)
     if settlement is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="결산안을 찾을 수 없습니다.",
         )
+    await require_membership_for_org(
+        session,
+        user_id=current_user.id,
+        organization_id=settlement.organization_id,
+        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+    )
 
     storage = LocalFileStorage(get_settings())
     try:
@@ -141,7 +147,17 @@ async def list_evidences(
     session: DbSession,
     current_user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> list[EvidenceResponse]:
-    del current_user
+    settlement = await session.get(Settlement, settlement_id)
+    if settlement is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="결산안을 찾을 수 없습니다.",
+        )
+    await require_membership_for_org(
+        session,
+        user_id=current_user.id,
+        organization_id=settlement.organization_id,
+    )
     result = await session.scalars(
         select(Evidence)
         .where(Evidence.settlement_id == settlement_id)
@@ -160,8 +176,12 @@ async def get_evidence(
     session: DbSession,
     current_user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> EvidenceResponse:
-    del current_user
     evidence = await _get_evidence_or_404(session, evidence_id)
+    await require_membership_for_org(
+        session,
+        user_id=current_user.id,
+        organization_id=evidence.organization_id,
+    )
     return EvidenceResponse.model_validate(evidence)
 
 
@@ -173,13 +193,15 @@ async def get_evidence(
 async def extract_evidence(
     evidence_id: uuid.UUID,
     session: DbSession,
-    current_user: Annotated[
-        AuthUser,
-        Depends(require_roles(RoleType.TREASURER, RoleType.ADMIN)),
-    ],
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> EvidenceResponse:
-    del current_user
     evidence = await _get_evidence_or_404(session, evidence_id)
+    await require_membership_for_org(
+        session,
+        user_id=current_user.id,
+        organization_id=evidence.organization_id,
+        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+    )
     evidence.status = EvidenceStatus.EXTRACTING
     await session.commit()
 
@@ -228,13 +250,15 @@ async def update_evidence(
     evidence_id: uuid.UUID,
     payload: EvidenceUpdateRequest,
     session: DbSession,
-    current_user: Annotated[
-        AuthUser,
-        Depends(require_roles(RoleType.TREASURER, RoleType.ADMIN)),
-    ],
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> EvidenceResponse:
-    del current_user
     evidence = await _get_evidence_or_404(session, evidence_id)
+    await require_membership_for_org(
+        session,
+        user_id=current_user.id,
+        organization_id=evidence.organization_id,
+        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+    )
 
     if "evidence_date" in payload.model_fields_set:
         evidence.evidence_date = payload.evidence_date

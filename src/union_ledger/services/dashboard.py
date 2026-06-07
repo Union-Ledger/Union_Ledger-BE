@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from union_ledger.models.entities import (
+    AuditComment,
     BankStatementUpload,
     BankTransaction,
     Evidence,
@@ -46,6 +47,7 @@ class _SettlementRollup:
     organization: Organization
     evidence_count: int = 0
     bank_transaction_count: int = 0
+    audit_comment_count: int = 0
     total_evidence_amount: Decimal = Decimal(0)
     reconciliation_counts: dict[MatchStatus, int] = field(default_factory=dict)
 
@@ -145,6 +147,15 @@ async def _rollups_for_settlements(
         row[0]: int(row[1]) for row in tx_rows.all()
     }
 
+    comment_rows = await session.execute(
+        select(AuditComment.settlement_id, func.count(AuditComment.id))
+        .where(AuditComment.settlement_id.in_(settlement_ids))
+        .group_by(AuditComment.settlement_id)
+    )
+    comment_count_by_settlement: dict[uuid.UUID, int] = {
+        row[0]: int(row[1]) for row in comment_rows.all()
+    }
+
     rec_rows = await session.execute(
         select(
             ReconciliationResult.settlement_id,
@@ -172,6 +183,9 @@ async def _rollups_for_settlements(
                 organization=orgs_by_id[settlement.organization_id],
                 evidence_count=ev_count,
                 bank_transaction_count=tx_count_by_settlement.get(
+                    settlement.id, 0
+                ),
+                audit_comment_count=comment_count_by_settlement.get(
                     settlement.id, 0
                 ),
                 total_evidence_amount=ev_total,

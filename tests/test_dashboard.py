@@ -284,3 +284,35 @@ async def test_auditor_dashboard_pending_limit(client: AsyncClient) -> None:
     body = resp.json()
     assert body["pending_count"] == 3  # full count
     assert len(body["pending_settlements"]) == 2  # truncated preview
+
+
+async def test_auditor_dashboard_includes_comment_count(client: AsyncClient) -> None:
+    """The pending preview surfaces the real audit comment count, not a
+    hardcoded 0 (it must agree with the /audit/settlements worklist)."""
+    await signup(client, email="dash_a_cm@konkuk.ac.kr")
+    admin = await auth_headers(client, "dash_a_cm@konkuk.ac.kr")
+    org = await create_org_as_admin(client, admin)
+    auditor_headers = await add_auditor_to_org(
+        client,
+        org_id=org["id"],
+        admin_headers=admin,
+        auditor_email="dash_a_cm_aud@konkuk.ac.kr",
+    )
+    settlement = await _create_settlement(
+        client, admin, org_id=org["id"], title="commented"
+    )
+    await client.post(f"/api/v1/settlements/{settlement['id']}/submit", headers=admin)
+    for text in ("확인 필요", "금액 재확인"):
+        cm = await client.post(
+            f"/api/v1/settlements/{settlement['id']}/comments",
+            headers=auditor_headers,
+            json={"comment": text},
+        )
+        assert cm.status_code == 201, cm.text
+
+    resp = await client.get("/api/v1/dashboard/auditor", headers=auditor_headers)
+    assert resp.status_code == 200, resp.text
+    card = next(
+        c for c in resp.json()["pending_settlements"] if c["title"] == "commented"
+    )
+    assert card["audit_comment_count"] == 2

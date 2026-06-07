@@ -117,7 +117,7 @@ async def auditor_dashboard(
                 audited_at=r.settlement.audited_at,
                 evidence_count=r.evidence_count,
                 bank_transaction_count=r.bank_transaction_count,
-                audit_comment_count=0,  # not tracked in dashboard rollup
+                audit_comment_count=r.audit_comment_count,
                 total_evidence_amount=r.total_evidence_amount,
                 reconciliation=AuditReconciliationSummary(
                     matched=r.reconciliation_counts.get(MatchStatus.MATCHED, 0),
