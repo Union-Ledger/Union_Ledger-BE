@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Iterable
+from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from union_ledger.core.config import get_settings
 from union_ledger.core.security import decode_access_token
 from union_ledger.db.session import get_db_session
 from union_ledger.models.entities import OrganizationMembership, User
@@ -59,6 +61,25 @@ async def get_current_user(
         name=user.name,
         roles=roles,
     )
+
+
+def require_operator(
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
+) -> AuthUser:
+    """Platform-operator gate.
+
+    Operators are the maintaining developers, identified by the
+    ``OPERATOR_EMAILS`` allowlist (see ``Settings``). They review 회장(admin)
+    applications and may create organizations directly. This is a
+    platform-level capability, independent of any org membership.
+    """
+    operator_emails = {email.lower() for email in get_settings().operator_emails}
+    if not operator_emails or current_user.email.lower() not in operator_emails:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="운영자 권한이 필요합니다.",
+        )
+    return current_user
 
 
 class RoleChecker:

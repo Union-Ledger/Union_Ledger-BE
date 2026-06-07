@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from httpx import AsyncClient
 
-from conftest import auth_headers, signup
+from conftest import auth_headers, create_org_as_admin, signup
 
 
 async def _create_org(
@@ -23,17 +23,15 @@ async def _create_org(
     college_name: str = "공과대학",
     department_name: str = "컴퓨터공학부",
 ) -> dict:
-    resp = await client.post(
-        "/api/v1/organizations",
-        headers=headers,
-        json={
-            "name": name,
-            "college_name": college_name,
-            "department_name": department_name,
-        },
+    # Self-signup no longer grants ADMIN and POST /organizations is operator-only,
+    # so go through the real 회장-application flow (submit → operator approves).
+    return await create_org_as_admin(
+        client,
+        headers,
+        name=name,
+        college_name=college_name,
+        department_name=department_name,
     )
-    assert resp.status_code == 201, resp.text
-    return resp.json()
 
 
 async def _issue_invite(

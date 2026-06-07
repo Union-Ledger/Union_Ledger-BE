@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from httpx import AsyncClient
 
-from conftest import DEFAULT_PASSWORD, auth_headers, bearer, login_access_token, signup
+from conftest import (
+    DEFAULT_PASSWORD,
+    auth_headers,
+    bearer,
+    create_org_as_admin,
+    login_access_token,
+    signup,
+)
 
 
 async def test_send_verification_code_returns_debug_code(client: AsyncClient) -> None:
@@ -102,8 +109,8 @@ async def test_signup_returns_access_token(client: AsyncClient) -> None:
     body = me.json()
     assert body["email"] == "happy.path@konkuk.ac.kr"
     assert body["name"] == "행복"
-    # No-invitation signup auto-creates the org with the user as ADMIN.
-    assert "admin" in body["roles"]
+    # No-invitation signup is a plain student account — no org, no role.
+    assert body["roles"] == []
 
 
 async def test_signup_duplicate_email_conflicts(client: AsyncClient) -> None:
@@ -171,8 +178,14 @@ async def test_me_rejects_bogus_token(client: AsyncClient) -> None:
 async def test_me_reflects_memberships(client: AsyncClient) -> None:
     await signup(client, email="member@konkuk.ac.kr", name="멤버")
     headers = await auth_headers(client, "member@konkuk.ac.kr")
-    me = await client.get("/api/v1/auth/me", headers=headers)
-    assert me.status_code == 200
-    body = me.json()
-    # Signup auto-creates an org with the user as ADMIN member.
-    assert body["roles"] == ["admin"]
+    # A plain signup holds no role.
+    before = await client.get("/api/v1/auth/me", headers=headers)
+    assert before.status_code == 200
+    assert before.json()["roles"] == []
+
+    # After an operator approves their 회장 application they hold ADMIN, and
+    # /me reflects it (the role gate re-queries memberships, not the token).
+    await create_org_as_admin(client, headers)
+    after = await client.get("/api/v1/auth/me", headers=headers)
+    assert after.status_code == 200
+    assert after.json()["roles"] == ["admin"]

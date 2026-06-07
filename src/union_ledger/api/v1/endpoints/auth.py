@@ -174,33 +174,28 @@ async def sign_up(
         email=email,
         password_hash=hash_password(payload.password),
         name=payload.name,
+        college_name=payload.college_name,
+        department_name=payload.department_name,
         university_email_verified=True,
         is_active=True,
     )
     session.add(user)
     await session.flush()
 
-    if organization is None:
-        organization = Organization(
-            name=f"{payload.college_name} {payload.department_name}",
-            college_name=payload.college_name,
-            department_name=payload.department_name,
-            created_by_id=user.id,
+    # No invitation = a plain student account. Email verification proves the
+    # person belongs to the school, which is enough to browse published
+    # settlements; students get NO organization membership (and thus no role).
+    # Becoming a 회장 (org ADMIN) now requires an operator-approved application
+    # (see /admin-applications) — self-signup no longer grants any role, which
+    # closes the old "first signup silently becomes ADMIN of a new org" gap.
+    if organization is not None:
+        membership = OrganizationMembership(
+            organization_id=organization.id,
+            user_id=user.id,
+            role=membership_role,
+            is_primary=True,
         )
-        session.add(organization)
-        await session.flush()
-        # No invitation = bootstrap path: the signup user becomes ADMIN of the
-        # org they just created. Without this they would have no way to issue
-        # invitations or publish settlements, leaving the org with zero admins.
-        membership_role = RoleType.ADMIN
-
-    membership = OrganizationMembership(
-        organization_id=organization.id,
-        user_id=user.id,
-        role=membership_role,
-        is_primary=True,
-    )
-    session.add(membership)
+        session.add(membership)
 
     if invitation is not None:
         invitation.status = InvitationStatus.ACCEPTED

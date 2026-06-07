@@ -1,21 +1,22 @@
 """Organization endpoint tests.
 
-Covers the slice on top of teammate's auth:
-  POST   /organizations              — any authenticated user; caller becomes Admin
+Covers:
+  POST   /organizations              — operator-only direct creation (seeding)
   GET    /organizations              — list orgs the caller is a member of
   GET    /organizations/{id}         — member-only (any role)
   GET    /organizations/{id}/members — Admin-only
 
-Note: teammate's `/auth/signup` already auto-creates a "signup org" with the
-user as ADMIN. Tests here create *additional* orgs via `POST /organizations`
-so the caller ends up holding multiple admin memberships.
+Note: self-signup no longer creates an org or grants any role. The normal way
+a 회장 gets an admin-owned org is the document-reviewed application flow
+(see `create_org_as_admin`); `POST /organizations` is now an operator-only
+escape hatch.
 """
 
 from __future__ import annotations
 
 from httpx import AsyncClient
 
-from conftest import auth_headers, signup
+from conftest import auth_headers, create_org_as_admin, operator_headers, signup
 
 
 async def _create_org(
@@ -26,17 +27,14 @@ async def _create_org(
     college_name: str = "공과대학",
     department_name: str = "컴퓨터공학부",
 ) -> dict:
-    resp = await client.post(
-        "/api/v1/organizations",
-        headers=headers,
-        json={
-            "name": name,
-            "college_name": college_name,
-            "department_name": department_name,
-        },
+    """Give the caller an admin-owned org via the real application→approval flow."""
+    return await create_org_as_admin(
+        client,
+        headers,
+        name=name,
+        college_name=college_name,
+        department_name=department_name,
     )
-    assert resp.status_code == 201, resp.text
-    return resp.json()
 
 
 async def test_create_organization_requires_auth(client: AsyncClient) -> None:
@@ -51,28 +49,50 @@ async def test_create_organization_requires_auth(client: AsyncClient) -> None:
     assert resp.status_code == 401, resp.text
 
 
-async def test_create_organization_caller_becomes_admin(client: AsyncClient) -> None:
-    await signup(client, email="owner@konkuk.ac.kr", name="회장")
-    headers = await auth_headers(client, "owner@konkuk.ac.kr")
-
-    org = await _create_org(client, headers, name="컴공 학생회")
+async def test_operator_creates_org_and_becomes_admin(client: AsyncClient) -> None:
+    # POST /organizations is operator-only; the operator becomes the org ADMIN.
+    op_headers = await operator_headers(client)
+    resp = await client.post(
+        "/api/v1/organizations",
+        headers=op_headers,
+        json={
+            "name": "컴공 학생회",
+            "college_name": "공과대학",
+            "department_name": "컴퓨터공학부",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    org = resp.json()
     assert org["name"] == "컴공 학생회"
     assert org["college_name"] == "공과대학"
 
-    # Both the signup-org and the new org grant ADMIN — distinct role values
-    # are deduped, so /me returns just {"admin"}.
-    me = await client.get("/api/v1/auth/me", headers=headers)
+    me = await client.get("/api/v1/auth/me", headers=op_headers)
     assert me.status_code == 200
-    roles = set(me.json()["roles"])
-    assert roles == {"admin"}
+    assert set(me.json()["roles"]) == {"admin"}
 
 
-async def test_create_organization_rejects_blank_fields(client: AsyncClient) -> None:
-    await signup(client, email="blank@konkuk.ac.kr")
-    headers = await auth_headers(client, "blank@konkuk.ac.kr")
+async def test_create_organization_requires_operator(client: AsyncClient) -> None:
+    # A normal (non-operator) user cannot create an organization directly.
+    await signup(client, email="regular@konkuk.ac.kr")
+    headers = await auth_headers(client, "regular@konkuk.ac.kr")
     resp = await client.post(
         "/api/v1/organizations",
         headers=headers,
+        json={
+            "name": "무단 조직",
+            "college_name": "공과대학",
+            "department_name": "컴퓨터공학부",
+        },
+    )
+    assert resp.status_code == 403, resp.text
+
+
+async def test_create_organization_rejects_blank_fields(client: AsyncClient) -> None:
+    # Use an operator so the request reaches body validation (422), not the gate.
+    op_headers = await operator_headers(client)
+    resp = await client.post(
+        "/api/v1/organizations",
+        headers=op_headers,
         json={"name": "", "college_name": "공과대학", "department_name": "컴퓨터공학부"},
     )
     assert resp.status_code == 422, resp.text

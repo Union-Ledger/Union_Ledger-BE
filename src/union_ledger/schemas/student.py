@@ -12,7 +12,10 @@ from union_ledger.models.enums import SettlementStatus
 
 
 class StudentOrganizationSummary(BaseModel):
-    id: uuid.UUID
+    # id is None when no student-council org exists yet for the student's
+    # department (the dashboard still renders college/department + an empty
+    # current period).
+    id: uuid.UUID | None = None
     name: str
     college_name: str
     department_name: str

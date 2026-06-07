@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from union_ledger.models.base import TimestampedUUIDModel
 from union_ledger.models.enums import (
+    AdminApplicationStatus,
     ArtifactStatus,
     ArtifactType,
     BankStatementStatus,
@@ -55,6 +56,11 @@ class User(TimestampedUUIDModel):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     password_hash: Mapped[str | None] = mapped_column(String(255))
     name: Mapped[str | None] = mapped_column(String(120))
+    # A student's school identity, captured at signup. Students are NOT org
+    # members, so the student viewer/dashboard resolves "my department council"
+    # by matching these against organizations' college/department.
+    college_name: Mapped[str | None] = mapped_column(String(120))
+    department_name: Mapped[str | None] = mapped_column(String(120))
     university_email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
@@ -116,6 +122,40 @@ class Invitation(TimestampedUUIDModel):
         nullable=False,
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OrganizationAdminApplication(TimestampedUUIDModel):
+    """회장(admin) application.
+
+    A school-verified user submits proof documents that they lead a student
+    organization; platform operators review and approve or reject. On approval
+    the applicant becomes ADMIN of a newly created organization. This is the
+    only sanctioned way to obtain an org-ADMIN role (self-signup no longer
+    grants it).
+    """
+
+    __tablename__ = "organization_admin_applications"
+
+    applicant_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+    organization_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    college_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    department_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    # Uploaded proof documents: [{file_name, file_path, content_type, size}, ...].
+    documents: Mapped[list] = mapped_column(_JSON_COLUMN, default=list, nullable=False)
+    status: Mapped[AdminApplicationStatus] = mapped_column(
+        _enum_column(AdminApplicationStatus, "admin_application_status"),
+        default=AdminApplicationStatus.PENDING,
+        nullable=False,
+    )
+    review_note: Mapped[str | None] = mapped_column(Text)
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("organizations.id")
+    )
 
 
 class SettlementTemplate(TimestampedUUIDModel):

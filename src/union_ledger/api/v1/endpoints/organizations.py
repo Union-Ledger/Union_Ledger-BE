@@ -6,7 +6,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from union_ledger.api.deps.auth import get_current_user, require_roles_in_org
+from union_ledger.api.deps.auth import (
+    get_current_user,
+    require_operator,
+    require_roles_in_org,
+)
 from union_ledger.db.session import get_db_session
 from union_ledger.models.entities import OrganizationMembership
 from union_ledger.models.enums import RoleType
@@ -38,16 +42,19 @@ AdminOnly = Annotated[
     "/organizations",
     response_model=OrganizationResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="학생회 조직 생성 (생성자가 Admin)",
+    summary="학생회 조직 직접 생성 (운영자 전용 / 시딩용)",
 )
 async def create_org(
     payload: OrganizationCreateRequest,
-    current_user: Annotated[AuthUser, Depends(get_current_user)],
+    operator: Annotated[AuthUser, Depends(require_operator)],
     session: DbSession,
 ) -> OrganizationResponse:
+    # Operator-only escape hatch (the operator becomes ADMIN). The normal way a
+    # 회장 gets an org is the document-reviewed application flow
+    # (/admin-applications) — this exists for operator seeding/repair only.
     organization = await create_organization(
         session,
-        creator_id=current_user.id,
+        creator_id=operator.id,
         name=payload.name,
         college_name=payload.college_name,
         department_name=payload.department_name,

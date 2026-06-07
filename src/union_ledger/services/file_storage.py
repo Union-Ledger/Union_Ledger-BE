@@ -38,11 +38,25 @@ class LocalFileStorage:
         settlement_id: uuid.UUID,
         upload_file: UploadFile,
     ) -> StoredFile:
+        return await self._save_upload(
+            Path("evidences") / str(settlement_id), upload_file
+        )
+
+    async def save_admin_application_file(
+        self,
+        application_id: uuid.UUID,
+        upload_file: UploadFile,
+    ) -> StoredFile:
+        return await self._save_upload(
+            Path("admin_applications") / str(application_id), upload_file
+        )
+
+    async def _save_upload(self, subdir: Path, upload_file: UploadFile) -> StoredFile:
         original_name = self.validate_filename(upload_file.filename or "upload.bin")
         suffix = Path(original_name).suffix.lower()
         file_bytes = await upload_file.read()
 
-        relative_path = Path("evidences") / str(settlement_id) / f"{uuid.uuid4()}{suffix}"
+        relative_path = subdir / f"{uuid.uuid4()}{suffix}"
         absolute_path = (self._root / relative_path).resolve()
         absolute_path.parent.mkdir(parents=True, exist_ok=True)
         absolute_path.write_bytes(file_bytes)

@@ -83,14 +83,14 @@ async def _seed_evidence(
 
 async def test_treasurer_dashboard_includes_admin_org(client: AsyncClient) -> None:
     """ADMIN-role memberships are counted toward the treasurer dashboard.
-    A fresh signup is already ADMIN of the auto-created signup-org, and
-    POST /organizations adds a second ADMIN membership → count == 2."""
+    Self-signup no longer creates an org, so an approved 회장 application is
+    the user's single ADMIN membership → count == 1."""
     await signup(client, email="dash_t_admin@konkuk.ac.kr")
     headers = await auth_headers(client, "dash_t_admin@konkuk.ac.kr")
     await create_org_as_admin(client, headers)
     resp = await client.get("/api/v1/dashboard/treasurer", headers=headers)
     assert resp.status_code == 200
-    assert resp.json()["organization_count"] == 2
+    assert resp.json()["organization_count"] == 1
 
 
 async def test_treasurer_dashboard_aggregates_across_settlements(

@@ -21,6 +21,12 @@ class InvitationStatus(StrEnum):
     REVOKED = "revoked"
 
 
+class AdminApplicationStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
 class SettlementStatus(StrEnum):
     DRAFT = "draft"
     READY_FOR_REVIEW = "ready_for_review"

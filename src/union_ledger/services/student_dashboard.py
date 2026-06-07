@@ -13,6 +13,7 @@ from union_ledger.models.entities import (
     Organization,
     OrganizationMembership,
     Settlement,
+    User,
 )
 from union_ledger.services.public import is_settlement_public
 from union_ledger.services.student_viewer import (
@@ -21,6 +22,7 @@ from union_ledger.services.student_viewer import (
     format_period_label_short,
     latest_audit_summary_comment,
     list_period_settlement_cards,
+    resolve_org_by_user_identity,
     settlement_aggregates,
     sort_period_rows_primary_first,
 )
@@ -81,13 +83,26 @@ async def resolve_dashboard_organization(
         )
         .limit(1)
     )
-    if membership is None:
-        raise NoOrganizationMembership("소속 조직이 없습니다.")
+    if membership is not None:
+        org = await session.get(Organization, membership.organization_id)
+        if org is not None:
+            return org
 
-    org = await session.get(Organization, membership.organization_id)
-    if org is None:
-        raise NoOrganizationMembership("소속 조직이 없습니다.")
-    return org
+    # Plain student (no membership): show their department's council if it
+    # exists yet, otherwise a synthetic org carrying their college/department so
+    # the dashboard still renders (empty current period, college overview).
+    identity_org = await resolve_org_by_user_identity(session, user_id=user_id)
+    if identity_org is not None:
+        return identity_org
+
+    user = await session.get(User, user_id)
+    if user is None or not user.college_name or not user.department_name:
+        raise NoOrganizationMembership("소속 정보가 없습니다.")
+    return Organization(
+        name=f"{user.college_name} {user.department_name}",
+        college_name=user.college_name,
+        department_name=user.department_name,
+    )
 
 
 def _pick_current_period_settlement(

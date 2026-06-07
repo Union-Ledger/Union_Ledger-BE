@@ -8,7 +8,6 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -20,6 +19,7 @@ from union_ledger.models.entities import (
     Organization,
     OrganizationMembership,
     Settlement,
+    User,
 )
 from union_ledger.models.enums import SettlementStatus
 from union_ledger.schemas.settlement import ALLOWED_SEMESTERS
@@ -164,7 +164,32 @@ async def user_visible_colleges(
         .where(OrganizationMembership.user_id == user_id)
         .distinct()
     )
-    return {name for name in result.all() if name}
+    colleges = {name for name in result.all() if name}
+    # A plain student holds no membership; fall back to the college recorded on
+    # their account so they can still browse their college's published settlements.
+    user = await session.get(User, user_id)
+    if user is not None and user.college_name:
+        colleges.add(user.college_name)
+    return colleges
+
+
+async def resolve_org_by_user_identity(
+    session: AsyncSession, *, user_id: uuid.UUID
+) -> Organization | None:
+    """The 'my' org for a member-less student: the council whose college and
+    department match the student's account. Returns None if none exists yet."""
+    user = await session.get(User, user_id)
+    if user is None or not user.college_name or not user.department_name:
+        return None
+    return await session.scalar(
+        select(Organization)
+        .where(
+            Organization.college_name == user.college_name,
+            Organization.department_name == user.department_name,
+        )
+        .order_by(Organization.created_at.asc())
+        .limit(1)
+    )
 
 
 async def settlement_aggregates(
@@ -261,7 +286,11 @@ async def resolve_primary_organization_id(
         )
         .limit(1)
     )
-    return membership.organization_id if membership else None
+    if membership is not None:
+        return membership.organization_id
+    # No membership (plain student): treat their department's council as primary.
+    org = await resolve_org_by_user_identity(session, user_id=user_id)
+    return org.id if org else None
 
 
 async def list_period_settlement_cards(

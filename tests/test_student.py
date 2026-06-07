@@ -92,7 +92,7 @@ async def test_period_cards_audit_in_progress_and_published(
         department_name=dept_b,
     )
 
-    auditor_a = await add_auditor_to_org(
+    await add_auditor_to_org(
         client,
         org_id=org_a["id"],
         admin_headers=headers_a,

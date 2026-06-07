@@ -1,5 +1,8 @@
 from fastapi import APIRouter
 
+from union_ledger.api.v1.endpoints.admin_applications import (
+    router as admin_applications_router,
+)
 from union_ledger.api.v1.endpoints.artifacts import router as artifacts_router
 from union_ledger.api.v1.endpoints.audit import router as audit_router
 from union_ledger.api.v1.endpoints.audit_workflow import router as audit_workflow_router
@@ -22,6 +25,7 @@ from union_ledger.api.v1.endpoints.system import router as system_router
 
 router = APIRouter()
 router.include_router(auth_router)
+router.include_router(admin_applications_router)
 router.include_router(health_router)
 router.include_router(system_router)
 router.include_router(organizations_router)

@@ -34,6 +34,7 @@ from sqlalchemy.pool import StaticPool
 os.environ.setdefault("DEBUG", "true")
 os.environ.setdefault("SMTP_ENABLED", "false")
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-do-not-use-in-prod-32chars-min")
+os.environ.setdefault("OPERATOR_EMAILS", "operator@konkuk.ac.kr")
 
 from union_ledger.core.config import get_settings  # noqa: E402
 from union_ledger.db.session import get_db_session  # noqa: E402
@@ -107,6 +108,9 @@ async def client(
 DEFAULT_PASSWORD = "TestPass123!"
 DEFAULT_COLLEGE = "공과대학"
 DEFAULT_DEPARTMENT = "컴퓨터공학부"
+# Must match the OPERATOR_EMAILS env var set above. An operator is just a normal
+# user whose email is on the allowlist; they review 회장 applications.
+OPERATOR_EMAIL = "operator@konkuk.ac.kr"
 
 
 async def signup(
@@ -251,6 +255,18 @@ async def add_treasurer_to_org(
     return await auth_headers(client, treasurer_email)
 
 
+async def operator_headers(client: AsyncClient) -> dict[str, str]:
+    """Auth headers for the platform operator (email on the OPERATOR_EMAILS
+    allowlist). Signs the operator up once, then reuses it within the test."""
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": OPERATOR_EMAIL, "password": DEFAULT_PASSWORD},
+    )
+    if login.status_code != 200:
+        await signup(client, email=OPERATOR_EMAIL, name="운영자")
+    return await auth_headers(client, OPERATOR_EMAIL)
+
+
 async def create_org_as_admin(
     client: AsyncClient,
     headers: dict[str, str],
@@ -259,20 +275,36 @@ async def create_org_as_admin(
     college_name: str = DEFAULT_COLLEGE,
     department_name: str = DEFAULT_DEPARTMENT,
 ) -> dict:
-    """POST /organizations as the caller; the caller becomes Admin of the new org.
+    """Make the caller ADMIN of a new org via the real 회장-application flow:
+    the caller submits an application (with a proof doc), then an operator
+    approves it. Returns a dict with the created org's id + identifying fields.
 
-    Returns the org JSON. Used by tests that need a deterministic, named org
-    separate from the auto-created signup-org (where the user is already
-    ADMIN by default after teammate's signup endpoint).
+    Self-signup no longer grants ADMIN, so this is how tests obtain an
+    admin-owned org. The returned shape stays {id, name, college_name,
+    department_name} so existing callers keep working.
     """
-    resp = await client.post(
-        "/api/v1/organizations",
+    app_resp = await client.post(
+        "/api/v1/admin-applications",
         headers=headers,
-        json={
-            "name": name,
+        data={
+            "organization_name": name,
             "college_name": college_name,
             "department_name": department_name,
         },
+        files={"documents": ("proof.pdf", b"%PDF-1.4 fake proof", "application/pdf")},
     )
-    assert resp.status_code == 201, resp.text
-    return resp.json()
+    assert app_resp.status_code == 201, app_resp.text
+    application_id = app_resp.json()["id"]
+
+    op_headers = await operator_headers(client)
+    approve = await client.post(
+        f"/api/v1/admin-applications/{application_id}/approve",
+        headers=op_headers,
+    )
+    assert approve.status_code == 200, approve.text
+    return {
+        "id": approve.json()["organization_id"],
+        "name": name,
+        "college_name": college_name,
+        "department_name": department_name,
+    }

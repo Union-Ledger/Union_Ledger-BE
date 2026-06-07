@@ -1,8 +1,9 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -39,6 +40,13 @@ class Settings(BaseSettings):
     allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://localhost:5173"]
     )
+    # Platform operators (the maintaining developers). Only these accounts may
+    # review 회장(admin) applications and create organizations directly. Set via
+    # the OPERATOR_EMAILS env var as a comma-separated list.
+    operator_emails: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        validation_alias="OPERATOR_EMAILS",
+    )
 
     @field_validator("debug", mode="before")
     @classmethod
@@ -61,6 +69,17 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return Path(value)
         return Path("storage")
+
+    @field_validator("operator_emails", mode="before")
+    @classmethod
+    def parse_operator_emails(cls, value: object) -> object:
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return [item.strip().lower() for item in value.split(",") if item.strip()]
+        if isinstance(value, (list, tuple)):
+            return [str(item).strip().lower() for item in value if str(item).strip()]
+        return value
 
     @field_validator("smtp_use_ssl")
     @classmethod
