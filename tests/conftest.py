@@ -34,7 +34,7 @@ from sqlalchemy.pool import StaticPool
 os.environ.setdefault("DEBUG", "true")
 os.environ.setdefault("SMTP_ENABLED", "false")
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-do-not-use-in-prod-32chars-min")
-os.environ.setdefault("OPERATOR_EMAILS", "operator@konkuk.ac.kr")
+os.environ.setdefault("OPERATOR_EMAILS", "operator@konkuk.ac.kr,ops@example.com")
 
 from union_ledger.core.config import get_settings  # noqa: E402
 from union_ledger.db.session import get_db_session  # noqa: E402
@@ -111,6 +111,8 @@ DEFAULT_DEPARTMENT = "컴퓨터공학부"
 # Must match the OPERATOR_EMAILS env var set above. An operator is just a normal
 # user whose email is on the allowlist; they review 회장 applications.
 OPERATOR_EMAIL = "operator@konkuk.ac.kr"
+# A non-konkuk operator email — exercises the domain-bypass for operators.
+OPERATOR_EMAIL_EXTERNAL = "ops@example.com"
 
 
 async def signup(

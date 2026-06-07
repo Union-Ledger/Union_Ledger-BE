@@ -35,6 +35,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 def _validate_university_email(email: str) -> str:
     normalized = email.strip().lower()
+    # Platform operators (maintainers) are allowlisted by email and may use any
+    # domain — they aren't necessarily students/staff with a konkuk address.
+    operator_emails = {item.lower() for item in get_settings().operator_emails}
+    if normalized in operator_emails:
+        return normalized
     if not normalized.endswith("@konkuk.ac.kr"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

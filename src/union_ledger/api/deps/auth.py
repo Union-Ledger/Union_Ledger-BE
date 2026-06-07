@@ -55,11 +55,13 @@ async def get_current_user(
     )
     roles = sorted(set(roles_result.all()), key=lambda value: value.value)
 
+    operator_emails = {email.lower() for email in get_settings().operator_emails}
     return AuthUser(
         id=user.id,
         email=user.email,
         name=user.name,
         roles=roles,
+        is_operator=user.email.lower() in operator_emails,
     )
 
 
@@ -73,8 +75,7 @@ def require_operator(
     applications and may create organizations directly. This is a
     platform-level capability, independent of any org membership.
     """
-    operator_emails = {email.lower() for email in get_settings().operator_emails}
-    if not operator_emails or current_user.email.lower() not in operator_emails:
+    if not current_user.is_operator:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="운영자 권한이 필요합니다.",

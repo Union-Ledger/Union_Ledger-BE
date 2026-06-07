@@ -6,6 +6,7 @@ from httpx import AsyncClient
 
 from conftest import (
     DEFAULT_PASSWORD,
+    OPERATOR_EMAIL_EXTERNAL,
     auth_headers,
     bearer,
     create_org_as_admin,
@@ -189,3 +190,34 @@ async def test_me_reflects_memberships(client: AsyncClient) -> None:
     after = await client.get("/api/v1/auth/me", headers=headers)
     assert after.status_code == 200
     assert after.json()["roles"] == ["admin"]
+
+
+# --- Operators (allowlist) may use a non-konkuk email --------------------
+
+
+async def test_operator_with_external_email_can_signup(client: AsyncClient) -> None:
+    """An OPERATOR_EMAILS account may use any domain — the konkuk-only check is
+    bypassed for operators — and /auth/me flags them as an operator."""
+    token = await signup(client, email=OPERATOR_EMAIL_EXTERNAL, name="운영자")
+    assert token
+    me = await client.get("/api/v1/auth/me", headers=bearer(token))
+    assert me.status_code == 200, me.text
+    body = me.json()
+    assert body["email"] == OPERATOR_EMAIL_EXTERNAL
+    assert body["is_operator"] is True
+
+
+async def test_non_operator_non_konkuk_email_is_rejected(client: AsyncClient) -> None:
+    resp = await client.post(
+        "/api/v1/auth/send-verification-code",
+        json={"email": "random.person@gmail.com"},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+async def test_me_is_operator_false_for_regular_user(client: AsyncClient) -> None:
+    await signup(client, email="plain.user@konkuk.ac.kr")
+    headers = await auth_headers(client, "plain.user@konkuk.ac.kr")
+    me = await client.get("/api/v1/auth/me", headers=headers)
+    assert me.status_code == 200
+    assert me.json()["is_operator"] is False

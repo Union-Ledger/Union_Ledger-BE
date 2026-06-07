@@ -17,6 +17,9 @@ class AuthUser(BaseModel):
     email: str
     name: str | None
     roles: list[RoleType]
+    # True when the account is on the OPERATOR_EMAILS allowlist (platform
+    # maintainer). Lets the FE show the operator-only review section.
+    is_operator: bool = False
 
 
 class SendVerificationCodeResponse(BaseModel):
