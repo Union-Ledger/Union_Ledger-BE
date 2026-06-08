@@ -97,7 +97,10 @@ async def login_for_access_token(
     payload: LoginRequest,
     session: AsyncSession = Depends(get_db_session),
 ) -> TokenResponse:
-    user = await session.scalar(select(User).where(User.email == payload.email))
+    # Signup stores the email normalized (strip + lower); normalize here too so
+    # login isn't case/whitespace-sensitive (e.g. mobile auto-capitalization).
+    email = payload.email.strip().lower()
+    user = await session.scalar(select(User).where(User.email == email))
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="이메일 또는 비밀번호가 올바르지 않습니다.",

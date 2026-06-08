@@ -163,6 +163,18 @@ async def test_login_ok(client: AsyncClient) -> None:
     assert token
 
 
+async def test_login_normalizes_email_case(client: AsyncClient) -> None:
+    # Signup stores emails lowercased; login must match regardless of the
+    # casing/whitespace the user types (e.g. mobile auto-capitalization).
+    await signup(client, email="casing@konkuk.ac.kr")
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "  Casing@Konkuk.AC.kr ", "password": DEFAULT_PASSWORD},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["access_token"]
+
+
 async def test_me_requires_auth(client: AsyncClient) -> None:
     resp = await client.get("/api/v1/auth/me")
     assert resp.status_code == 401, resp.text
