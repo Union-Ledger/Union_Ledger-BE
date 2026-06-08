@@ -392,6 +392,131 @@ async def test_role_transfer_hands_off_role(client: AsyncClient) -> None:
     assert "treasurer" not in outgoing_me.json()["roles"]
 
 
+# --- Received list + Decline ----------------------------------------------
+
+
+async def test_received_invitations_lists_pending_for_invitee(
+    client: AsyncClient,
+) -> None:
+    await signup(client, email="rcv_admin@konkuk.ac.kr")
+    admin_headers = await auth_headers(client, "rcv_admin@konkuk.ac.kr")
+    org = await _create_org(client, admin_headers)
+    await _issue_invite(
+        client,
+        admin_headers,
+        org_id=org["id"],
+        invited_email="rcv_invitee@konkuk.ac.kr",
+    )
+
+    await signup(client, email="rcv_invitee@konkuk.ac.kr")
+    invitee_headers = await auth_headers(client, "rcv_invitee@konkuk.ac.kr")
+
+    resp = await client.get(
+        "/api/v1/invitations/received", headers=invitee_headers
+    )
+    assert resp.status_code == 200, resp.text
+    items = resp.json()
+    assert len(items) == 1
+    assert items[0]["invited_email"] == "rcv_invitee@konkuk.ac.kr"
+    assert items[0]["status"] == "pending"
+    assert items[0]["code"] is None, "received list MUST NOT expose codes"
+
+
+async def test_decline_invitation_sets_declined(client: AsyncClient) -> None:
+    await signup(client, email="dec_admin@konkuk.ac.kr")
+    admin_headers = await auth_headers(client, "dec_admin@konkuk.ac.kr")
+    org = await _create_org(client, admin_headers)
+    issued = await _issue_invite(
+        client,
+        admin_headers,
+        org_id=org["id"],
+        invited_email="dec_invitee@konkuk.ac.kr",
+    )
+
+    await signup(client, email="dec_invitee@konkuk.ac.kr")
+    invitee_headers = await auth_headers(client, "dec_invitee@konkuk.ac.kr")
+
+    resp = await client.post(
+        f"/api/v1/invitations/{issued['id']}/decline",
+        headers=invitee_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "declined"
+    assert resp.json()["code"] is None
+
+    # The received inbox should now be empty (pending-only by default).
+    received = await client.get(
+        "/api/v1/invitations/received", headers=invitee_headers
+    )
+    assert received.json() == []
+
+
+async def test_decline_invitation_email_mismatch_is_403(client: AsyncClient) -> None:
+    await signup(client, email="dm_admin@konkuk.ac.kr")
+    admin_headers = await auth_headers(client, "dm_admin@konkuk.ac.kr")
+    org = await _create_org(client, admin_headers)
+    issued = await _issue_invite(
+        client,
+        admin_headers,
+        org_id=org["id"],
+        invited_email="dm_intended@konkuk.ac.kr",
+    )
+
+    await signup(client, email="dm_imposter@konkuk.ac.kr")
+    imposter_headers = await auth_headers(client, "dm_imposter@konkuk.ac.kr")
+    resp = await client.post(
+        f"/api/v1/invitations/{issued['id']}/decline",
+        headers=imposter_headers,
+    )
+    assert resp.status_code == 403, resp.text
+
+
+async def test_declined_invitation_cannot_be_accepted(client: AsyncClient) -> None:
+    await signup(client, email="da_admin@konkuk.ac.kr")
+    admin_headers = await auth_headers(client, "da_admin@konkuk.ac.kr")
+    org = await _create_org(client, admin_headers)
+    issued = await _issue_invite(
+        client,
+        admin_headers,
+        org_id=org["id"],
+        invited_email="da_invitee@konkuk.ac.kr",
+    )
+
+    await signup(client, email="da_invitee@konkuk.ac.kr")
+    invitee_headers = await auth_headers(client, "da_invitee@konkuk.ac.kr")
+
+    decline = await client.post(
+        f"/api/v1/invitations/{issued['id']}/decline",
+        headers=invitee_headers,
+    )
+    assert decline.status_code == 200
+
+    # A declined invitation is terminal — accepting its code now fails.
+    accept = await client.post(
+        "/api/v1/invitations/accept",
+        headers=invitee_headers,
+        json={"code": issued["code"]},
+    )
+    assert accept.status_code == 400, accept.text
+
+
+async def test_decline_unknown_invitation_is_404(client: AsyncClient) -> None:
+    await signup(client, email="dn_invitee@konkuk.ac.kr")
+    headers = await auth_headers(client, "dn_invitee@konkuk.ac.kr")
+    resp = await client.post(
+        "/api/v1/invitations/00000000-0000-0000-0000-000000000000/decline",
+        headers=headers,
+    )
+    assert resp.status_code == 404, resp.text
+
+
+async def test_decline_requires_auth(client: AsyncClient) -> None:
+    resp = await client.post(
+        "/api/v1/invitations/00000000-0000-0000-0000-000000000000/decline",
+    )
+    assert resp.status_code == 401, resp.text
+
+
 async def test_role_transfer_requires_role_holder(client: AsyncClient) -> None:
     # A user who's ADMIN of their *own* signup-org still has no membership in
     # rt_admin's separate org → nothing to transfer there → 403.

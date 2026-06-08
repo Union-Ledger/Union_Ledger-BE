@@ -31,3 +31,7 @@ class SendVerificationCodeResponse(BaseModel):
 class VerifyEmailCodeResponse(BaseModel):
     message: str
     verified: bool
+
+
+class ResetPasswordResponse(BaseModel):
+    message: str

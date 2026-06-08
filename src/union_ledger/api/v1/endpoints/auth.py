@@ -13,13 +13,16 @@ from union_ledger.db.session import get_db_session
 from union_ledger.models.entities import Invitation, Organization, OrganizationMembership, User
 from union_ledger.models.enums import InvitationStatus, RoleType
 from union_ledger.schemas.auth_request import (
+    ForgotPasswordRequest,
     LoginRequest,
+    ResetPasswordRequest,
     SendVerificationCodeRequest,
     SignUpRequest,
     VerifyEmailCodeRequest,
 )
 from union_ledger.schemas.auth_response import (
     AuthUser,
+    ResetPasswordResponse,
     SendVerificationCodeResponse,
     TokenResponse,
     VerifyEmailCodeResponse,
@@ -96,6 +99,83 @@ async def verify_email(
             detail="인증 코드가 올바르지 않거나 만료되었습니다.",
         )
     return VerifyEmailCodeResponse(message="이메일 인증이 완료되었습니다.", verified=True)
+
+
+@router.post(
+    "/password/forgot",
+    response_model=SendVerificationCodeResponse,
+    summary="비밀번호 재설정 코드 발급 (비밀번호 찾기)",
+)
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> SendVerificationCodeResponse:
+    email = _validate_university_email(payload.email)
+    user = await session.scalar(select(User).where(User.email == email))
+
+    reconfigure_email_verification_store()
+    settings = get_settings()
+
+    # Avoid account enumeration: respond identically whether or not the email
+    # has an account. We only actually issue + send a code for real accounts.
+    if user is None or not user.is_active:
+        return SendVerificationCodeResponse(
+            message="가입된 계정인 경우 재설정 코드를 발송했습니다.",
+            expires_in_seconds=settings.email_verification_code_expire_minutes * 60,
+            debug_code=None,
+        )
+
+    code, expires_in = email_verification_store.issue_code(email)
+    try:
+        await asyncio.to_thread(send_verification_email, email, code, expires_in)
+    except EmailDeliveryError as exc:
+        email_verification_store.revoke_code(email)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    return SendVerificationCodeResponse(
+        message="가입된 계정인 경우 재설정 코드를 발송했습니다.",
+        expires_in_seconds=expires_in,
+        debug_code=code if settings.debug else None,
+    )
+
+
+@router.post(
+    "/password/reset",
+    response_model=ResetPasswordResponse,
+    summary="비밀번호 재설정 (코드 검증 후 새 비밀번호 저장)",
+)
+async def reset_password(
+    payload: ResetPasswordRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> ResetPasswordResponse:
+    email = _validate_university_email(payload.email)
+
+    reconfigure_email_verification_store()
+    verified = email_verification_store.verify_code(email, payload.code.strip())
+    if not verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="인증 코드가 올바르지 않거나 만료되었습니다.",
+        )
+
+    user = await session.scalar(select(User).where(User.email == email))
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="가입된 계정을 찾을 수 없습니다.",
+        )
+
+    user.password_hash = hash_password(payload.new_password)
+    await session.commit()
+
+    # The code was single-use; clear any lingering verified state so it can't
+    # be reused for signup.
+    email_verification_store.consume_verified(email)
+
+    return ResetPasswordResponse(message="비밀번호가 재설정되었습니다.")
 
 
 @router.post("/login", response_model=TokenResponse, summary="Issue JWT access token")

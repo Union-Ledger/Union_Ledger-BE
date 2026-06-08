@@ -17,6 +17,23 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=8)
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=3)
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str = Field(min_length=3)
+    code: str = Field(min_length=4, max_length=10)
+    new_password: str = Field(min_length=8)
+    new_password_confirm: str = Field(min_length=8)
+
+    @model_validator(mode="after")
+    def validate_passwords_match(self) -> "ResetPasswordRequest":
+        if self.new_password != self.new_password_confirm:
+            raise ValueError("비밀번호와 비밀번호 확인이 일치하지 않습니다.")
+        return self
+
+
 class SignUpRequest(BaseModel):
     name: str = Field(min_length=1)
     email: str = Field(min_length=3)
