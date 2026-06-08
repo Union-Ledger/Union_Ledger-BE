@@ -113,6 +113,27 @@ async def list_invitations(
     return list(result.all())
 
 
+async def list_received_invitations(
+    session: AsyncSession,
+    *,
+    email: str,
+    pending_only: bool = True,
+) -> list[Invitation]:
+    """Invitations addressed to ``email`` (i.e. the ones a user *received*).
+
+    Defaults to PENDING only so the caller can render a "받은 초대" inbox that
+    only shows actionable items.
+    """
+    stmt = select(Invitation).where(
+        Invitation.invited_email == _normalize_email(email)
+    )
+    if pending_only:
+        stmt = stmt.where(Invitation.status == InvitationStatus.PENDING)
+    stmt = stmt.order_by(Invitation.created_at.desc())
+    result = await session.scalars(stmt)
+    return list(result.all())
+
+
 async def revoke_invitation(
     session: AsyncSession,
     *,
@@ -128,24 +149,6 @@ async def revoke_invitation(
     await session.commit()
     await session.refresh(invitation)
     return invitation
-
-
-async def list_received_invitations(
-    session: AsyncSession,
-    *,
-    email: str,
-) -> list[Invitation]:
-    """Pending invitations addressed to `email` — the invitee's in-app inbox."""
-    normalized = _normalize_email(email)
-    result = await session.scalars(
-        select(Invitation)
-        .where(
-            Invitation.invited_email == normalized,
-            Invitation.status == InvitationStatus.PENDING,
-        )
-        .order_by(Invitation.created_at.desc())
-    )
-    return list(result.all())
 
 
 async def accept_invitation(
@@ -231,6 +234,34 @@ async def _accept_loaded_invitation(
     await session.refresh(membership)
     await session.refresh(invitation)
     return AcceptedInvitation(invitation=invitation, membership=membership)
+
+
+async def decline_invitation(
+    session: AsyncSession,
+    *,
+    invitation_id: uuid.UUID,
+    user: User,
+) -> Invitation:
+    """The invited user declines a pending invitation they received.
+
+    Mirrors ``accept_invitation`` on the rejection side: the caller must be
+    logged in as the invited email, and only PENDING invitations can be
+    declined (revoked/accepted/expired ones are terminal).
+    """
+    invitation = await session.get(Invitation, invitation_id)
+    if invitation is None:
+        raise InvitationNotFound("초대를 찾을 수 없습니다.")
+    if invitation.invited_email.lower() != user.email.lower():
+        raise InvitationEmailMismatch(
+            "초대된 이메일과 현재 로그인된 계정이 일치하지 않습니다."
+        )
+    if invitation.status != InvitationStatus.PENDING:
+        raise InvitationNotAcceptable("이미 처리되었거나 만료된 초대입니다.")
+
+    invitation.status = InvitationStatus.DECLINED
+    await session.commit()
+    await session.refresh(invitation)
+    return invitation
 
 
 async def issue_role_transfer(

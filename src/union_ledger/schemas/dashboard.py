@@ -15,7 +15,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
-from union_ledger.models.enums import SettlementStatus
+from union_ledger.models.enums import RoleType, SettlementStatus
 from union_ledger.schemas.audit_workflow import AuditWorklistItem
 
 # --- Treasurer ----------------------------------------------------------
@@ -62,3 +62,71 @@ class AuditorDashboard(BaseModel):
     in_progress_count: int  # UNDER_AUDIT (unused in current lifecycle)
     completed_count: int  # APPROVED + REJECTED
     pending_settlements: list[AuditWorklistItem]
+
+
+# --- President (회장) ----------------------------------------------------
+
+
+class PresidentOrganizationInfo(BaseModel):
+    id: uuid.UUID
+    name: str
+    college_name: str
+    department_name: str
+    president_name: str | None
+    academic_year: int | None
+    semester: str | None
+    current_period_label: str | None
+
+
+class PresidentTreasurerCard(BaseModel):
+    """One card in the "재정담당자 작업 현황" (Container) panel.
+
+    Settlements are owned by the org, not a specific treasurer, so each card
+    represents a settlement's progress rather than an individual treasurer.
+    """
+
+    settlement_id: uuid.UUID
+    title: str
+    academic_year: int
+    semester: str
+    semester_label: str
+    status: SettlementStatus
+    status_label: str
+    progress_percent: float
+    total_expense: Decimal
+    evidence_count: int
+    submitted_at: datetime | None
+    audited_at: datetime | None
+    last_activity_at: datetime | None
+
+
+class PresidentAuditorCard(BaseModel):
+    """One card in the "감사위원 활동 현황" panel (derived from audit comments)."""
+
+    user_id: uuid.UUID
+    name: str | None
+    email: str
+    assigned_count: int
+    completed_count: int
+    pending_count: int
+    avg_review_days: float | None
+    last_activity_at: datetime | None
+
+
+class PresidentMemberCard(BaseModel):
+    user_id: uuid.UUID
+    name: str | None
+    email: str
+    role: RoleType
+    is_primary: bool
+
+
+class PresidentDashboard(BaseModel):
+    organization: PresidentOrganizationInfo
+    team_member_count: int
+    submitted_settlement_count: int
+    audit_completed_count: int
+    review_pending_count: int
+    treasurer_work: list[PresidentTreasurerCard]
+    auditor_activity: list[PresidentAuditorCard]
+    members: list[PresidentMemberCard]

@@ -19,6 +19,7 @@ class InvitationStatus(StrEnum):
     ACCEPTED = "accepted"
     EXPIRED = "expired"
     REVOKED = "revoked"
+    DECLINED = "declined"
 
 
 class AdminApplicationStatus(StrEnum):

@@ -316,3 +316,93 @@ async def test_auditor_dashboard_includes_comment_count(client: AsyncClient) -> 
         c for c in resp.json()["pending_settlements"] if c["title"] == "commented"
     )
     assert card["audit_comment_count"] == 2
+
+
+# --- President dashboard ------------------------------------------------
+
+
+async def test_president_dashboard_rolls_up_team(client: AsyncClient) -> None:
+    await signup(client, email="pres_admin@konkuk.ac.kr", name="홍회장")
+    admin = await auth_headers(client, "pres_admin@konkuk.ac.kr")
+    org = await create_org_as_admin(client, admin)
+    auditor_headers = await add_auditor_to_org(
+        client,
+        org_id=org["id"],
+        admin_headers=admin,
+        auditor_email="pres_aud@konkuk.ac.kr",
+    )
+    await add_treasurer_to_org(
+        client,
+        org_id=org["id"],
+        admin_headers=admin,
+        treasurer_email="pres_t@konkuk.ac.kr",
+    )
+
+    approved = await _create_settlement(
+        client, admin, org_id=org["id"], title="approved"
+    )
+    pending = await _create_settlement(
+        client, admin, org_id=org["id"], title="pending"
+    )
+
+    await client.post(f"/api/v1/settlements/{approved['id']}/submit", headers=admin)
+    await client.post(
+        f"/api/v1/settlements/{approved['id']}/audit/approve",
+        headers=auditor_headers,
+        json={"comment": "확인 완료"},
+    )
+    await client.post(f"/api/v1/settlements/{pending['id']}/submit", headers=admin)
+
+    resp = await client.get(
+        f"/api/v1/dashboard/president?organization_id={org['id']}", headers=admin
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["team_member_count"] == 3  # admin + treasurer + auditor
+    assert body["submitted_settlement_count"] == 2  # both submitted
+    assert body["audit_completed_count"] == 1  # approved
+    assert body["review_pending_count"] == 1  # still-submitted one
+
+    assert body["organization"]["college_name"] == "공과대학"
+    assert body["organization"]["president_name"] == "홍회장"
+    assert body["organization"]["current_period_label"] == "2026-1학기"
+
+    titles = {c["title"] for c in body["treasurer_work"]}
+    assert titles == {"approved", "pending"}
+
+    roles = {m["role"] for m in body["members"]}
+    assert {"admin", "treasurer", "auditor"} <= roles
+
+    # The auditor commented on the approved settlement → counted as completed.
+    assert len(body["auditor_activity"]) == 1
+    card = body["auditor_activity"][0]
+    assert card["email"] == "pres_aud@konkuk.ac.kr"
+    assert card["completed_count"] == 1
+
+
+async def test_president_dashboard_defaults_to_signup_org(client: AsyncClient) -> None:
+    # No organization_id → resolves the caller's own ADMIN (signup) org.
+    await signup(client, email="pres_default@konkuk.ac.kr", name="기본회장")
+    headers = await auth_headers(client, "pres_default@konkuk.ac.kr")
+    resp = await client.get("/api/v1/dashboard/president", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["organization"]["president_name"] == "기본회장"
+
+
+async def test_president_dashboard_rejects_non_admin(client: AsyncClient) -> None:
+    await signup(client, email="pres_owner@konkuk.ac.kr")
+    admin = await auth_headers(client, "pres_owner@konkuk.ac.kr")
+    org = await create_org_as_admin(client, admin)
+    treasurer_headers = await add_treasurer_to_org(
+        client,
+        org_id=org["id"],
+        admin_headers=admin,
+        treasurer_email="pres_not_admin@konkuk.ac.kr",
+    )
+
+    resp = await client.get(
+        f"/api/v1/dashboard/president?organization_id={org['id']}",
+        headers=treasurer_headers,
+    )
+    assert resp.status_code == 403, resp.text

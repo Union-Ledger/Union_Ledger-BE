@@ -188,6 +188,114 @@ async def test_me_rejects_bogus_token(client: AsyncClient) -> None:
     assert resp.status_code == 401, resp.text
 
 
+# --- Password reset (비밀번호 찾기) -------------------------------------
+
+
+async def test_forgot_password_returns_debug_code_for_existing_user(
+    client: AsyncClient,
+) -> None:
+    await signup(client, email="forgot.me@konkuk.ac.kr")
+    resp = await client.post(
+        "/api/v1/auth/password/forgot",
+        json={"email": "forgot.me@konkuk.ac.kr"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["debug_code"], "DEBUG=true exposes the reset code"
+
+
+async def test_forgot_password_unknown_email_no_enumeration(
+    client: AsyncClient,
+) -> None:
+    # Unknown account: still 200, but no code is issued (debug_code is null).
+    resp = await client.post(
+        "/api/v1/auth/password/forgot",
+        json={"email": "nobody.here@konkuk.ac.kr"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["debug_code"] is None
+
+
+async def test_forgot_password_rejects_non_konkuk_email(client: AsyncClient) -> None:
+    resp = await client.post(
+        "/api/v1/auth/password/forgot",
+        json={"email": "outsider@gmail.com"},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+async def test_reset_password_full_flow_and_login(client: AsyncClient) -> None:
+    await signup(client, email="reset.flow@konkuk.ac.kr")
+
+    forgot = await client.post(
+        "/api/v1/auth/password/forgot",
+        json={"email": "reset.flow@konkuk.ac.kr"},
+    )
+    code = forgot.json()["debug_code"]
+
+    new_password = "BrandNewPass1!"
+    reset = await client.post(
+        "/api/v1/auth/password/reset",
+        json={
+            "email": "reset.flow@konkuk.ac.kr",
+            "code": code,
+            "new_password": new_password,
+            "new_password_confirm": new_password,
+        },
+    )
+    assert reset.status_code == 200, reset.text
+
+    # Old password no longer works.
+    old = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "reset.flow@konkuk.ac.kr", "password": DEFAULT_PASSWORD},
+    )
+    assert old.status_code == 401, old.text
+
+    # New password works.
+    new = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "reset.flow@konkuk.ac.kr", "password": new_password},
+    )
+    assert new.status_code == 200, new.text
+
+
+async def test_reset_password_wrong_code_fails(client: AsyncClient) -> None:
+    await signup(client, email="reset.badcode@konkuk.ac.kr")
+    await client.post(
+        "/api/v1/auth/password/forgot",
+        json={"email": "reset.badcode@konkuk.ac.kr"},
+    )
+    resp = await client.post(
+        "/api/v1/auth/password/reset",
+        json={
+            "email": "reset.badcode@konkuk.ac.kr",
+            "code": "000000",
+            "new_password": "Whatever123!",
+            "new_password_confirm": "Whatever123!",
+        },
+    )
+    assert resp.status_code == 400, resp.text
+
+
+async def test_reset_password_mismatch_is_422(client: AsyncClient) -> None:
+    await signup(client, email="reset.mismatch@konkuk.ac.kr")
+    forgot = await client.post(
+        "/api/v1/auth/password/forgot",
+        json={"email": "reset.mismatch@konkuk.ac.kr"},
+    )
+    code = forgot.json()["debug_code"]
+    resp = await client.post(
+        "/api/v1/auth/password/reset",
+        json={
+            "email": "reset.mismatch@konkuk.ac.kr",
+            "code": code,
+            "new_password": "Whatever123!",
+            "new_password_confirm": "Different123!",
+        },
+    )
+    assert resp.status_code == 422, resp.text
+
+
 async def test_me_reflects_memberships(client: AsyncClient) -> None:
     await signup(client, email="member@konkuk.ac.kr", name="멤버")
     headers = await auth_headers(client, "member@konkuk.ac.kr")

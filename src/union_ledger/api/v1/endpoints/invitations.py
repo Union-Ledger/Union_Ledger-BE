@@ -26,6 +26,7 @@ from union_ledger.services.invitation import (
     MembershipAlreadyExists,
     accept_invitation,
     accept_invitation_by_id,
+    decline_invitation,
     issue_invitation,
     issue_role_transfer,
     list_invitations,
@@ -267,6 +268,25 @@ async def list_my_invitations(
     ]
 
 
+@router.get(
+    "/invitations/received",
+    response_model=list[InvitationResponse],
+    summary="내가 받은 초대 목록 (회장이 보낸 초대)",
+)
+async def list_my_received_invitations(
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
+    session: DbSession,
+    include_handled: bool = False,
+) -> list[InvitationResponse]:
+    items = await list_received_invitations(
+        session,
+        email=current_user.email,
+        pending_only=not include_handled,
+    )
+    # Never leak codes — the inbox only needs ids + metadata to act on.
+    return [_to_response(item, include_code=False) for item in items]
+
+
 @router.post(
     "/invitations/{invitation_id}/accept",
     response_model=InvitationResponse,
@@ -307,3 +327,42 @@ async def accept_my_invitation(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc
     return _to_response(result.invitation, include_code=False)
+
+
+@router.post(
+    "/invitations/{invitation_id}/decline",
+    response_model=InvitationResponse,
+    summary="받은 초대 거절 (초대 대상자)",
+)
+async def decline(
+    invitation_id: uuid.UUID,
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
+    session: DbSession,
+) -> InvitationResponse:
+    user = await session.get(User, current_user.id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    try:
+        invitation = await decline_invitation(
+            session, invitation_id=invitation_id, user=user
+        )
+    except InvitationNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except InvitationEmailMismatch as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+    except InvitationNotAcceptable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return _to_response(invitation, include_code=False)

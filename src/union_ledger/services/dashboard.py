@@ -16,6 +16,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -30,6 +31,7 @@ from union_ledger.models.entities import (
     OrganizationMembership,
     ReconciliationResult,
     Settlement,
+    User,
 )
 from union_ledger.models.enums import MatchStatus, RoleType, SettlementStatus
 
@@ -370,3 +372,357 @@ async def get_auditor_dashboard(
         completed_count=completed,
         pending_settlements=rollups,
     )
+
+
+# --- President (회장) -----------------------------------------------------
+#
+# The 회장 대시보드 is org-scoped: it rolls up the whole team's status for the
+# ADMIN who runs the org. Unlike the treasurer/auditor dashboards (which span
+# every org a user belongs to), this one is anchored to a single organization.
+#
+# Data-model note: settlements are owned by the *organization*, not by an
+# individual treasurer, and audit decisions don't record which auditor made
+# them. So the "재정담당자 작업 현황" cards are per-settlement progress cards,
+# and auditor activity is derived from the audit comments each auditor authored
+# (the only per-auditor signal we have).
+
+_SUBMITTED_STATUSES = frozenset(
+    {
+        SettlementStatus.SUBMITTED,
+        SettlementStatus.UNDER_AUDIT,
+        SettlementStatus.RESUBMITTED,
+        SettlementStatus.APPROVED,
+        SettlementStatus.REJECTED,
+    }
+)
+_AUDIT_COMPLETED_STATUSES = frozenset(
+    {SettlementStatus.APPROVED, SettlementStatus.REJECTED}
+)
+_REVIEW_PENDING_STATUSES = frozenset(
+    {
+        SettlementStatus.SUBMITTED,
+        SettlementStatus.RESUBMITTED,
+        SettlementStatus.UNDER_AUDIT,
+    }
+)
+
+
+class PresidentDashboardError(Exception):
+    pass
+
+
+class PresidentAccessDenied(PresidentDashboardError):
+    pass
+
+
+class NoAdminOrganization(PresidentDashboardError):
+    pass
+
+
+@dataclass(slots=True)
+class TreasurerWorkCard:
+    settlement: Settlement
+    evidence_count: int
+    total_expense: Decimal
+    progress_percent: float
+    last_activity_at: datetime | None
+
+
+@dataclass(slots=True)
+class AuditorActivityCard:
+    user: User
+    assigned_count: int
+    completed_count: int
+    pending_count: int
+    avg_review_days: float | None
+    last_activity_at: datetime | None
+
+
+@dataclass(slots=True)
+class MemberCard:
+    user: User
+    role: RoleType
+    is_primary: bool
+
+
+@dataclass(slots=True)
+class PresidentSummary:
+    organization: Organization
+    president_name: str | None
+    current_period: Settlement | None
+    team_member_count: int
+    submitted_settlement_count: int
+    audit_completed_count: int
+    review_pending_count: int
+    treasurer_work: list[TreasurerWorkCard]
+    auditor_activity: list[AuditorActivityCard]
+    members: list[MemberCard]
+
+
+async def resolve_admin_organization(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    organization_id: uuid.UUID | None,
+) -> Organization:
+    """Resolve the org for the president dashboard, enforcing ADMIN access.
+
+    With ``organization_id`` the caller must be ADMIN of that org. Without it
+    we pick their primary (or earliest) ADMIN membership.
+    """
+    if organization_id is not None:
+        membership = await session.scalar(
+            select(OrganizationMembership).where(
+                OrganizationMembership.user_id == user_id,
+                OrganizationMembership.organization_id == organization_id,
+                OrganizationMembership.role == RoleType.ADMIN,
+            )
+        )
+        if membership is None:
+            raise PresidentAccessDenied("회장(Admin) 권한이 있는 조직이 아닙니다.")
+        org = await session.get(Organization, organization_id)
+        if org is None:
+            raise PresidentAccessDenied("조직을 찾을 수 없습니다.")
+        return org
+
+    membership = await session.scalar(
+        select(OrganizationMembership)
+        .where(
+            OrganizationMembership.user_id == user_id,
+            OrganizationMembership.role == RoleType.ADMIN,
+        )
+        .order_by(
+            OrganizationMembership.is_primary.desc(),
+            OrganizationMembership.created_at.asc(),
+        )
+        .limit(1)
+    )
+    if membership is None:
+        raise NoAdminOrganization("회장(Admin) 권한이 있는 조직이 없습니다.")
+    org = await session.get(Organization, membership.organization_id)
+    if org is None:
+        raise NoAdminOrganization("조직을 찾을 수 없습니다.")
+    return org
+
+
+def _settlement_last_activity(settlement: Settlement) -> datetime | None:
+    candidates = [
+        settlement.updated_at,
+        settlement.submitted_at,
+        settlement.audited_at,
+        settlement.published_at,
+    ]
+    present = [ts for ts in candidates if ts is not None]
+    return max(present) if present else None
+
+
+async def get_president_dashboard(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    organization_id: uuid.UUID | None = None,
+    recent_limit: int = 10,
+) -> PresidentSummary:
+    org = await resolve_admin_organization(
+        session, user_id=user_id, organization_id=organization_id
+    )
+
+    memberships = (
+        await session.scalars(
+            select(OrganizationMembership)
+            .where(OrganizationMembership.organization_id == org.id)
+            .order_by(OrganizationMembership.created_at.asc())
+        )
+    ).all()
+
+    member_user_ids = {m.user_id for m in memberships}
+    users_by_id: dict[uuid.UUID, User] = {}
+    if member_user_ids:
+        users_result = await session.scalars(
+            select(User).where(User.id.in_(member_user_ids))
+        )
+        users_by_id = {u.id: u for u in users_result.all()}
+
+    president_name: str | None = None
+    primary_admin = next(
+        (m for m in memberships if m.role == RoleType.ADMIN and m.is_primary),
+        next((m for m in memberships if m.role == RoleType.ADMIN), None),
+    )
+    if primary_admin is not None:
+        president_user = users_by_id.get(primary_admin.user_id)
+        president_name = president_user.name if president_user else None
+
+    # Build the member roster (dedupe by user+role pairs, keep order).
+    members: list[MemberCard] = []
+    for m in memberships:
+        user = users_by_id.get(m.user_id)
+        if user is None:
+            continue
+        members.append(MemberCard(user=user, role=m.role, is_primary=m.is_primary))
+
+    # All settlements for this org (status counts + cards both need them).
+    settlements = list(
+        (
+            await session.scalars(
+                select(Settlement)
+                .where(Settlement.organization_id == org.id)
+                .order_by(
+                    Settlement.submitted_at.desc().nullslast(),
+                    Settlement.created_at.desc(),
+                )
+            )
+        ).all()
+    )
+
+    submitted_count = sum(
+        1 for s in settlements if s.status in _SUBMITTED_STATUSES
+    )
+    audit_completed_count = sum(
+        1 for s in settlements if s.status in _AUDIT_COMPLETED_STATUSES
+    )
+    review_pending_count = sum(
+        1 for s in settlements if s.status in _REVIEW_PENDING_STATUSES
+    )
+
+    current_period = settlements[0] if settlements else None
+    # Prefer the latest period chronologically for the "current 학기" label.
+    if settlements:
+        current_period = max(
+            settlements,
+            key=lambda s: (s.academic_year, s.semester),
+        )
+
+    recent = settlements[:recent_limit]
+    rollups = await _rollups_for_settlements(
+        session, settlements=recent, orgs_by_id={org.id: org}
+    )
+    treasurer_work = [
+        TreasurerWorkCard(
+            settlement=r.settlement,
+            evidence_count=r.evidence_count,
+            total_expense=r.total_evidence_amount,
+            progress_percent=r.progress_percent,
+            last_activity_at=_settlement_last_activity(r.settlement),
+        )
+        for r in rollups
+    ]
+
+    auditor_activity = await _auditor_activity_cards(
+        session,
+        org=org,
+        memberships=memberships,
+        users_by_id=users_by_id,
+        settlements=settlements,
+    )
+
+    return PresidentSummary(
+        organization=org,
+        president_name=president_name,
+        current_period=current_period,
+        team_member_count=len(member_user_ids),
+        submitted_settlement_count=submitted_count,
+        audit_completed_count=audit_completed_count,
+        review_pending_count=review_pending_count,
+        treasurer_work=treasurer_work,
+        auditor_activity=auditor_activity,
+        members=members,
+    )
+
+
+async def _auditor_activity_cards(
+    session: AsyncSession,
+    *,
+    org: Organization,
+    memberships: Sequence[OrganizationMembership],
+    users_by_id: dict[uuid.UUID, User],
+    settlements: Sequence[Settlement],
+) -> list[AuditorActivityCard]:
+    auditor_memberships = [
+        m for m in memberships if m.role == RoleType.AUDITOR
+    ]
+    if not auditor_memberships:
+        return []
+
+    settlement_by_id = {s.id: s for s in settlements}
+    membership_user = {m.id: m.user_id for m in auditor_memberships}
+
+    # Audit comments authored by this org's auditors are the only per-auditor
+    # signal. Map: auditor user_id -> {settlement_id -> latest comment time}.
+    reviewed: dict[uuid.UUID, dict[uuid.UUID, datetime]] = {
+        m.user_id: {} for m in auditor_memberships
+    }
+    if settlement_by_id:
+        comment_rows = await session.execute(
+            select(
+                AuditComment.author_membership_id,
+                AuditComment.settlement_id,
+                AuditComment.created_at,
+            )
+            .where(
+                AuditComment.settlement_id.in_(list(settlement_by_id.keys())),
+                AuditComment.author_membership_id.in_(
+                    [m.id for m in auditor_memberships]
+                ),
+            )
+        )
+        for membership_id, settlement_id, created_at in comment_rows.all():
+            user_id = membership_user.get(membership_id)
+            if user_id is None:
+                continue
+            bucket = reviewed[user_id]
+            existing = bucket.get(settlement_id)
+            if existing is None or (created_at and created_at > existing):
+                bucket[settlement_id] = created_at
+
+    cards: list[AuditorActivityCard] = []
+    # Dedupe auditors by user (a user could hold the role once per org anyway).
+    seen_users: set[uuid.UUID] = set()
+    for m in auditor_memberships:
+        if m.user_id in seen_users:
+            continue
+        seen_users.add(m.user_id)
+        user = users_by_id.get(m.user_id)
+        if user is None:
+            continue
+
+        reviewed_settlements = reviewed.get(m.user_id, {})
+        completed = 0
+        pending = 0
+        review_days: list[float] = []
+        last_activity: datetime | None = None
+        for sid, commented_at in reviewed_settlements.items():
+            settlement = settlement_by_id.get(sid)
+            if settlement is None:
+                continue
+            if commented_at is not None and (
+                last_activity is None or commented_at > last_activity
+            ):
+                last_activity = commented_at
+            if settlement.status in _AUDIT_COMPLETED_STATUSES:
+                completed += 1
+                if (
+                    settlement.submitted_at is not None
+                    and settlement.audited_at is not None
+                ):
+                    delta = settlement.audited_at - settlement.submitted_at
+                    review_days.append(round(delta.total_seconds() / 86400, 1))
+            elif settlement.status in _REVIEW_PENDING_STATUSES:
+                pending += 1
+
+        avg_review_days = (
+            round(sum(review_days) / len(review_days), 1) if review_days else None
+        )
+        if last_activity is None:
+            last_activity = m.created_at
+
+        cards.append(
+            AuditorActivityCard(
+                user=user,
+                assigned_count=completed + pending,
+                completed_count=completed,
+                pending_count=pending,
+                avg_review_days=avg_review_days,
+                last_activity_at=last_activity,
+            )
+        )
+    return cards
