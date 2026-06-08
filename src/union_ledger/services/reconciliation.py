@@ -73,6 +73,13 @@ _RECONCILE_EVIDENCE_STATUSES = {
     EvidenceStatus.UPLOADED,
 }
 
+# When exact date+amount match fails, we optionally pair by date only and flag
+# AMOUNT_MISMATCH — but only if the closest same-day bank row is plausibly
+# related (e.g. OCR typo 3700 vs bank 4000). Pairing 3700 with 300000 on the
+# same calendar day is misleading, so skip soft match and leave both as missing.
+_DATE_SOFT_MATCH_MAX_RATIO = Decimal("10")
+_DATE_SOFT_MATCH_MIN_ABS_GAP = Decimal("1000")
+
 
 async def run_reconciliation(
     session: AsyncSession,
@@ -313,9 +320,21 @@ def _find_partial(
 ) -> BankTransaction | None:
     """Soft match by single attribute. `by` ∈ {"date", "amount"}."""
     if by == "date":
-        for tx in candidates:
-            if tx.transaction_date == evidence.evidence_date:
-                return tx
+        same_day = [
+            tx
+            for tx in candidates
+            if tx.transaction_date == evidence.evidence_date
+        ]
+        if not same_day:
+            return None
+        if evidence.amount is None or evidence.amount == _ZERO:
+            return same_day[0]
+        target = abs(evidence.amount)
+        closest = min(same_day, key=lambda tx: abs(abs(tx.amount) - target))
+        gap = abs(abs(closest.amount) - target)
+        if gap <= max(target * _DATE_SOFT_MATCH_MAX_RATIO, _DATE_SOFT_MATCH_MIN_ABS_GAP):
+            return closest
+        return None
     elif by == "amount":
         target = abs(evidence.amount) if evidence.amount is not None else None
         for tx in candidates:

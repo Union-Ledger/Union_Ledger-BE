@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import io
 from datetime import date
+from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from httpx import AsyncClient
@@ -285,6 +287,27 @@ def test_coerce_date_accepts_kb_datetime_format() -> None:
     assert _coerce_date("2026/06/07 16:59") == date(2026, 6, 7)
     assert _coerce_date("2026.06.07") == date(2026, 6, 7)
     assert _coerce_date("2026-06-07 16:59:05") == date(2026, 6, 7)
+
+
+_KAKAO_FIXTURE = (
+    Path(__file__).resolve().parent / "fixtures" / "bank_statements" / "kakao_sample.xlsx"
+)
+
+
+def test_parse_kakao_bank_export_sample() -> None:
+    """Kakao Bank email xlsx uses strict OOXML + 구분/거래금액 columns."""
+    file_bytes = _KAKAO_FIXTURE.read_bytes()
+    transactions = parse_bank_statement_bytes(file_bytes)
+
+    assert len(transactions) == 5
+
+    by_description = {tx.description: tx for tx in transactions}
+    assert by_description["카카오페이"].transaction_date == date(2026, 6, 8)
+    assert by_description["카카오페이"].amount == Decimal("-15000")
+    assert by_description["넥슨캐시"].amount == Decimal("-50000")
+    assert by_description["김철수 (모임회비)"].amount == Decimal("300000")
+    assert by_description["스타벅스"].amount == Decimal("-8500")
+    assert by_description["(주)회사명 (급여)"].amount == Decimal("1000000")
 
 
 def test_legacy_xls_routes_to_xlrd_reader() -> None:
