@@ -25,8 +25,10 @@ from union_ledger.schemas.auth_response import (
     VerifyEmailCodeResponse,
 )
 from union_ledger.services.email_verification_store import (
-    email_verification_store,
-    reconfigure_email_verification_store,
+    consume_verified,
+    issue_code,
+    revoke_code,
+    verify_code,
 )
 from union_ledger.services.email_sender import EmailDeliveryError, send_verification_email
 
@@ -53,15 +55,17 @@ def _validate_university_email(email: str) -> str:
     response_model=SendVerificationCodeResponse,
     summary="Issue temporary email verification code",
 )
-async def send_verification_code(payload: SendVerificationCodeRequest) -> SendVerificationCodeResponse:
+async def send_verification_code(
+    payload: SendVerificationCodeRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> SendVerificationCodeResponse:
     email = _validate_university_email(payload.email)
-    reconfigure_email_verification_store()
-    code, expires_in = email_verification_store.issue_code(email)
+    code, expires_in = await issue_code(session, email)
 
     try:
         await asyncio.to_thread(send_verification_email, email, code, expires_in)
     except EmailDeliveryError as exc:
-        email_verification_store.revoke_code(email)
+        await revoke_code(session, email)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
@@ -80,10 +84,12 @@ async def send_verification_code(payload: SendVerificationCodeRequest) -> SendVe
     response_model=VerifyEmailCodeResponse,
     summary="Verify university email with temporary code",
 )
-async def verify_email(payload: VerifyEmailCodeRequest) -> VerifyEmailCodeResponse:
+async def verify_email(
+    payload: VerifyEmailCodeRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> VerifyEmailCodeResponse:
     email = _validate_university_email(payload.email)
-    reconfigure_email_verification_store()
-    verified = email_verification_store.verify_code(email, payload.code.strip())
+    verified = await verify_code(session, email, payload.code.strip())
     if not verified:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -140,8 +146,7 @@ async def sign_up(
             detail="이미 가입된 이메일입니다.",
         )
 
-    reconfigure_email_verification_store()
-    if not email_verification_store.consume_verified(email):
+    if not await consume_verified(session, email):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="이메일 인증이 완료되지 않았습니다.",

@@ -68,6 +68,23 @@ class User(TimestampedUUIDModel):
     notifications: Mapped[list[Notification]] = relationship(back_populates="user")
 
 
+class EmailVerification(TimestampedUUIDModel):
+    """Persisted email-verification state (replaces the old in-memory store) so
+    verification codes and the 'verified' flag survive restarts and are shared
+    across workers. One row per email; re-issuing a code overwrites the code and
+    clears any prior verified flag.
+    """
+
+    __tablename__ = "email_verifications"
+
+    email: Mapped[str] = mapped_column(
+        String(255), unique=True, nullable=False, index=True
+    )
+    code: Mapped[str | None] = mapped_column(String(10))
+    code_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verified_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Organization(TimestampedUUIDModel):
     __tablename__ = "organizations"
 
