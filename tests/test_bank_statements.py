@@ -234,3 +234,37 @@ async def test_treasurer_can_upload(client: AsyncClient) -> None:
         files={"file": ("statement.xlsx", io.BytesIO(xlsx))},
     )
     assert resp.status_code == 201, resp.text
+
+
+async def test_upload_deposit_only_with_amount_suffixed_columns(
+    client: AsyncClient,
+) -> None:
+    """학생회비처럼 입금만 있는 거래내역서. Columns are 출금액/입금액 (both contain
+    '금액'); the deposit rows must NOT be dropped as if 출금액 were the amount."""
+    await signup(client, email="bs_dep@konkuk.ac.kr")
+    headers = await auth_headers(client, "bs_dep@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+    settlement = await _create_settlement(client, headers, org_id=org["id"])
+
+    xlsx = _build_xlsx(
+        [
+            ["거래일자", "적요", "출금액", "입금액"],
+            [date(2026, 4, 1), "학생회비", None, 50000],
+            [date(2026, 4, 2), "학생회비", None, 30000],
+        ]
+    )
+    resp = await client.post(
+        f"/api/v1/settlements/{settlement['id']}/bank-statements",
+        headers=headers,
+        files={"file": ("statement.xlsx", io.BytesIO(xlsx))},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["parsed_rows_count"] == 2
+
+    txs = await client.get(
+        f"/api/v1/settlements/{settlement['id']}/bank-transactions",
+        headers=headers,
+    )
+    assert txs.status_code == 200
+    amounts = sorted(float(row["amount"]) for row in txs.json())
+    assert amounts == [30000.0, 50000.0]  # deposits kept, positive

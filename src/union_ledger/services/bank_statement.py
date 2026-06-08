@@ -195,15 +195,27 @@ def _find_header_row(rows: Sequence[Sequence[object]]) -> tuple[int, dict[str, i
             cell = _normalize_header_cell(raw)
             if not cell:
                 continue
+            matched_withdrawal = _header_matches(cell, _WITHDRAWAL_KEYWORDS)
+            matched_deposit = _header_matches(cell, _DEPOSIT_KEYWORDS)
             if "date" not in column_map and _header_matches(cell, _DATE_KEYWORDS):
                 column_map["date"] = c_idx
             if "description" not in column_map and _header_matches(cell, _DESC_KEYWORDS):
                 column_map["description"] = c_idx
-            if "withdrawal" not in column_map and _header_matches(cell, _WITHDRAWAL_KEYWORDS):
+            if "withdrawal" not in column_map and matched_withdrawal:
                 column_map["withdrawal"] = c_idx
-            if "deposit" not in column_map and _header_matches(cell, _DEPOSIT_KEYWORDS):
+            if "deposit" not in column_map and matched_deposit:
                 column_map["deposit"] = c_idx
-            if "amount" not in column_map and _header_matches(cell, _AMOUNT_KEYWORDS):
+            # "출금액"/"입금액" also contain "금액", so they'd match the generic
+            # amount keyword too. Never classify a withdrawal/deposit column as
+            # the signed `amount` column — otherwise a statement with separate
+            # 출금액/입금액 columns reads only one of them and drops the other
+            # (e.g. deposit-only 학생회비 rows → 0 parsed → empty reconciliation).
+            if (
+                "amount" not in column_map
+                and not matched_withdrawal
+                and not matched_deposit
+                and _header_matches(cell, _AMOUNT_KEYWORDS)
+            ):
                 column_map["amount"] = c_idx
         has_amount_signal = (
             "amount" in column_map
