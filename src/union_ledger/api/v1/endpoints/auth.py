@@ -113,7 +113,6 @@ async def forgot_password(
     email = _validate_university_email(payload.email)
     user = await session.scalar(select(User).where(User.email == email))
 
-    reconfigure_email_verification_store()
     settings = get_settings()
 
     # Avoid account enumeration: respond identically whether or not the email
@@ -125,11 +124,11 @@ async def forgot_password(
             debug_code=None,
         )
 
-    code, expires_in = email_verification_store.issue_code(email)
+    code, expires_in = await issue_code(session, email)
     try:
         await asyncio.to_thread(send_verification_email, email, code, expires_in)
     except EmailDeliveryError as exc:
-        email_verification_store.revoke_code(email)
+        await revoke_code(session, email)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
@@ -153,8 +152,7 @@ async def reset_password(
 ) -> ResetPasswordResponse:
     email = _validate_university_email(payload.email)
 
-    reconfigure_email_verification_store()
-    verified = email_verification_store.verify_code(email, payload.code.strip())
+    verified = await verify_code(session, email, payload.code.strip())
     if not verified:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -173,7 +171,7 @@ async def reset_password(
 
     # The code was single-use; clear any lingering verified state so it can't
     # be reused for signup.
-    email_verification_store.consume_verified(email)
+    await consume_verified(session, email)
 
     return ResetPasswordResponse(message="비밀번호가 재설정되었습니다.")
 

@@ -475,11 +475,11 @@ async def resolve_admin_organization(
             select(OrganizationMembership).where(
                 OrganizationMembership.user_id == user_id,
                 OrganizationMembership.organization_id == organization_id,
-                OrganizationMembership.role == RoleType.ADMIN,
+                OrganizationMembership.role == RoleType.PRESIDENT,
             )
         )
         if membership is None:
-            raise PresidentAccessDenied("회장(Admin) 권한이 있는 조직이 아닙니다.")
+            raise PresidentAccessDenied("회장(President) 권한이 있는 조직이 아닙니다.")
         org = await session.get(Organization, organization_id)
         if org is None:
             raise PresidentAccessDenied("조직을 찾을 수 없습니다.")
@@ -489,7 +489,7 @@ async def resolve_admin_organization(
         select(OrganizationMembership)
         .where(
             OrganizationMembership.user_id == user_id,
-            OrganizationMembership.role == RoleType.ADMIN,
+            OrganizationMembership.role == RoleType.PRESIDENT,
         )
         .order_by(
             OrganizationMembership.is_primary.desc(),
@@ -498,7 +498,7 @@ async def resolve_admin_organization(
         .limit(1)
     )
     if membership is None:
-        raise NoAdminOrganization("회장(Admin) 권한이 있는 조직이 없습니다.")
+        raise NoAdminOrganization("회장(President) 권한이 있는 조직이 없습니다.")
     org = await session.get(Organization, membership.organization_id)
     if org is None:
         raise NoAdminOrganization("조직을 찾을 수 없습니다.")
@@ -545,8 +545,8 @@ async def get_president_dashboard(
 
     president_name: str | None = None
     primary_admin = next(
-        (m for m in memberships if m.role == RoleType.ADMIN and m.is_primary),
-        next((m for m in memberships if m.role == RoleType.ADMIN), None),
+        (m for m in memberships if m.role == RoleType.PRESIDENT and m.is_primary),
+        next((m for m in memberships if m.role == RoleType.PRESIDENT), None),
     )
     if primary_admin is not None:
         president_user = users_by_id.get(primary_admin.user_id)

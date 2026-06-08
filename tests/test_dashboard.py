@@ -372,7 +372,7 @@ async def test_president_dashboard_rolls_up_team(client: AsyncClient) -> None:
     assert titles == {"approved", "pending"}
 
     roles = {m["role"] for m in body["members"]}
-    assert {"admin", "treasurer", "auditor"} <= roles
+    assert {"president", "treasurer", "auditor"} <= roles
 
     # The auditor commented on the approved settlement → counted as completed.
     assert len(body["auditor_activity"]) == 1
@@ -381,10 +381,11 @@ async def test_president_dashboard_rolls_up_team(client: AsyncClient) -> None:
     assert card["completed_count"] == 1
 
 
-async def test_president_dashboard_defaults_to_signup_org(client: AsyncClient) -> None:
-    # No organization_id → resolves the caller's own ADMIN (signup) org.
+async def test_president_dashboard_defaults_to_president_org(client: AsyncClient) -> None:
+    # No organization_id → resolves the caller's single PRESIDENT org.
     await signup(client, email="pres_default@konkuk.ac.kr", name="기본회장")
     headers = await auth_headers(client, "pres_default@konkuk.ac.kr")
+    await create_org_as_admin(client, headers, name="기본조직")
     resp = await client.get("/api/v1/dashboard/president", headers=headers)
     assert resp.status_code == 200, resp.text
     assert resp.json()["organization"]["president_name"] == "기본회장"

@@ -6,7 +6,7 @@ Postgres native enums need the new label added with ALTER TYPE before any
 row can store it.
 
 Revision ID: 20260608_0004
-Revises: 20260603_0003
+Revises: 20260607_0008
 Create Date: 2026-06-08
 """
 
@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "20260608_0004"
-down_revision: str | Sequence[str] | None = "20260603_0003"
+down_revision: str | Sequence[str] | None = "20260607_0008"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
