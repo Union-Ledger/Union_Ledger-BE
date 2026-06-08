@@ -30,6 +30,7 @@ from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
 
+import xlrd
 from fastapi import UploadFile
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
@@ -40,7 +41,13 @@ from union_ledger.core.config import Settings
 from union_ledger.models.entities import BankStatementUpload, BankTransaction
 from union_ledger.models.enums import BankStatementStatus
 
-SUPPORTED_BANK_STATEMENT_SUFFIXES = {".xlsx", ".xlsm"}
+# .xls = legacy binary (KB·신한 등 일부 은행이 여전히 .xls로 내려줌), read via xlrd.
+SUPPORTED_BANK_STATEMENT_SUFFIXES = {".xlsx", ".xlsm", ".xls"}
+
+# Legacy .xls (BIFF) files are OLE2 compound documents — they start with this
+# 8-byte magic. .xlsx/.xlsm are ZIP archives (start with "PK"). We sniff the
+# bytes (not the filename) so a mislabeled extension still routes correctly.
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 _DATE_KEYWORDS = ("거래일", "거래일자", "일자", "날짜", "transaction_date", "date")
 _DESC_KEYWORDS = ("적요", "내용", "거래내역", "description", "memo", "비고")
@@ -145,13 +152,19 @@ def _coerce_date(value: object) -> date | None:
     text = str(value).strip()
     if not text:
         return None
-    # Common Korean bank exports: "2026-04-29", "2026.04.29", "20260429"
+    # Common Korean bank exports: "2026-04-29", "2026.04.29", "20260429", and
+    # datetime variants like KB's "2026.06.07 16:59:05" (거래일시 = date + time).
     candidates = (
         "%Y-%m-%d",
         "%Y/%m/%d",
         "%Y.%m.%d",
         "%Y%m%d",
         "%Y-%m-%d %H:%M:%S",
+        "%Y.%m.%d %H:%M:%S",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y.%m.%d %H:%M",
+        "%Y/%m/%d %H:%M",
     )
     for fmt in candidates:
         try:
@@ -230,22 +243,54 @@ def _find_header_row(rows: Sequence[Sequence[object]]) -> tuple[int, dict[str, i
     )
 
 
-def parse_bank_statement_bytes(file_bytes: bytes) -> list[ParsedTransaction]:
-    """Parse an xlsx into ParsedTransaction list. Pure function for testing."""
+def _read_rows_xlsx(file_bytes: bytes) -> list[list[object]]:
     try:
         wb = load_workbook(BytesIO(file_bytes), data_only=True, read_only=True)
     except (InvalidFileException, KeyError, OSError) as exc:
-        raise BankStatementParseError(
-            f"엑셀 파일을 열 수 없습니다: {exc}"
-        ) from exc
-
+        raise BankStatementParseError(f"엑셀 파일을 열 수 없습니다: {exc}") from exc
     sheet = wb.active
     if sheet is None:
         raise BankStatementParseError("엑셀에 시트가 없습니다.")
-
     # Read everything up-front; bank statements are typically <10k rows.
     rows = [list(row) for row in sheet.iter_rows(values_only=True)]
     wb.close()
+    return rows
+
+
+def _read_rows_xls(file_bytes: bytes) -> list[list[object]]:
+    """Read a legacy binary .xls (BIFF) via xlrd; openpyxl cannot open these."""
+    try:
+        book = xlrd.open_workbook(file_contents=file_bytes)
+    except Exception as exc:  # noqa: BLE001 — xlrd raises many error types on bad files
+        raise BankStatementParseError(f"엑셀 파일을 열 수 없습니다: {exc}") from exc
+    if book.nsheets == 0:
+        raise BankStatementParseError("엑셀에 시트가 없습니다.")
+    sheet = book.sheet_by_index(0)
+    rows: list[list[object]] = []
+    for r in range(sheet.nrows):
+        row: list[object] = []
+        for c in range(sheet.ncols):
+            cell = sheet.cell(r, c)
+            # Date-typed cells come back as Excel serials; hand _coerce_date a
+            # real datetime. Everything else (text/number) passes through as-is.
+            if cell.ctype == xlrd.XL_CELL_DATE:
+                row.append(xlrd.xldate_as_datetime(cell.value, book.datemode))
+            else:
+                row.append(cell.value)
+        rows.append(row)
+    return rows
+
+
+def parse_bank_statement_bytes(file_bytes: bytes) -> list[ParsedTransaction]:
+    """Parse an xlsx/xls workbook into a ParsedTransaction list.
+
+    Pure function for testing. Picks the reader by sniffing the file's magic
+    bytes (OLE2 → legacy .xls via xlrd, otherwise .xlsx/.xlsm via openpyxl).
+    """
+    if file_bytes[:8] == _OLE2_MAGIC:
+        rows = _read_rows_xls(file_bytes)
+    else:
+        rows = _read_rows_xlsx(file_bytes)
     if not rows:
         raise BankStatementParseError("엑셀이 비어 있습니다.")
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 from datetime import date
 
+import pytest
 from httpx import AsyncClient
 from openpyxl import Workbook
 
@@ -18,6 +19,11 @@ from conftest import (
     auth_headers,
     create_org_as_admin,
     signup,
+)
+from union_ledger.services.bank_statement import (
+    BankStatementParseError,
+    _coerce_date,
+    parse_bank_statement_bytes,
 )
 
 
@@ -268,3 +274,23 @@ async def test_upload_deposit_only_with_amount_suffixed_columns(
     assert txs.status_code == 200
     amounts = sorted(float(row["amount"]) for row in txs.json())
     assert amounts == [30000.0, 50000.0]  # deposits kept, positive
+
+
+# --- Unit tests: date coercion + legacy .xls routing ----------------------
+
+
+def test_coerce_date_accepts_kb_datetime_format() -> None:
+    # KB 국민은행 '거래일시' is a dotted date + time string.
+    assert _coerce_date("2026.06.07 16:59:05") == date(2026, 6, 7)
+    assert _coerce_date("2026/06/07 16:59") == date(2026, 6, 7)
+    assert _coerce_date("2026.06.07") == date(2026, 6, 7)
+    assert _coerce_date("2026-06-07 16:59:05") == date(2026, 6, 7)
+
+
+def test_legacy_xls_routes_to_xlrd_reader() -> None:
+    # An OLE2 header (binary .xls magic) that isn't a real workbook must be
+    # handled by the xls reader (xlrd) — proving we don't hand .xls to openpyxl
+    # (which would raise a different, misleading "not a zip" error).
+    ole2_garbage = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 128
+    with pytest.raises(BankStatementParseError):
+        parse_bank_statement_bytes(ole2_garbage)
