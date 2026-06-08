@@ -433,3 +433,42 @@ async def test_patch_match_rejects_outsider(
         json={"notes": "hacked"},
     )
     assert resp.status_code == 403, resp.text
+
+
+async def test_same_date_wildly_different_amounts_are_not_soft_paired(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """3700원 증빙과 300000원 입금이 같은 날이어도 억지로 금액 불일치로 묶지 않음."""
+    await signup(client, email="rc_gap@konkuk.ac.kr")
+    headers = await auth_headers(client, "rc_gap@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+    settlement = await _create_settlement(client, headers, org_id=org["id"])
+
+    await _seed_evidence(
+        db_sessionmaker,
+        settlement_id=uuid.UUID(settlement["id"]),
+        organization_id=uuid.UUID(org["id"]),
+        evidence_date=date(2026, 6, 9),
+        amount=Decimal("3700"),
+        merchant="카페",
+    )
+    await _upload_bank_statement(
+        client,
+        headers,
+        settlement_id=settlement["id"],
+        rows=[
+            ["거래일자", "적요", "금액"],
+            [date(2026, 6, 9), "모임회비", 300000],
+        ],
+    )
+
+    run = await client.post(
+        f"/api/v1/settlements/{settlement['id']}/reconciliation:run",
+        headers=headers,
+    )
+    assert run.status_code == 200, run.text
+    body = run.json()
+    assert body["matched"] == 0
+    assert body["amount_mismatch"] == 0
+    assert body["missing_bank_transaction"] == 1
+    assert body["missing_evidence"] == 1

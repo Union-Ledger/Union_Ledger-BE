@@ -5,9 +5,14 @@ of metadata before the table header), so the parser walks the sheet to find
 the header row by keyword matching, then reads `transaction_date`,
 `description`, and `amount` columns.
 
+Kakao Bank email xlsx uses strict OOXML that openpyxl cannot load; we fall back
+to reading `xl/worksheets/sheet1.xml` directly. Kakao columns:
+  거래일시 | 구분(출금/입금) | 거래금액 | 잔액 | 거래명 | 메모
+
 Heuristic header keywords (case/whitespace insensitive):
-  - date         : 거래일, 거래일자, 일자, 날짜, transaction_date, date
-  - description  : 적요, 내용, 거래내역, description, memo
+  - date         : 거래일시, 거래일, 거래일자, 일자, 날짜, transaction_date, date
+  - description  : 거래명, 적요, 내용, 거래내역, description, memo
+  - type         : 구분 (출금 → negative 거래금액)
   - withdrawal   : 출금, 출금액, withdrawal
   - deposit      : 입금, 입금액, deposit
   - amount       : 금액, 거래금액, amount
@@ -23,6 +28,8 @@ from __future__ import annotations
 
 import re
 import uuid
+import xml.etree.ElementTree as ET
+import zipfile
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -49,8 +56,26 @@ SUPPORTED_BANK_STATEMENT_SUFFIXES = {".xlsx", ".xlsm", ".xls"}
 # bytes (not the filename) so a mislabeled extension still routes correctly.
 _OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
-_DATE_KEYWORDS = ("거래일", "거래일자", "일자", "날짜", "transaction_date", "date")
-_DESC_KEYWORDS = ("적요", "내용", "거래내역", "description", "memo", "비고")
+_DATE_KEYWORDS = (
+    "거래일시",
+    "거래일",
+    "거래일자",
+    "일자",
+    "날짜",
+    "transaction_date",
+    "date",
+)
+_DESC_KEYWORDS = (
+    "거래명",
+    "적요",
+    "내용",
+    "거래내역",
+    "description",
+    "memo",
+    "비고",
+)
+_MEMO_KEYWORDS = ("메모", "note")
+_TYPE_KEYWORDS = ("구분", "입출금", "type")
 _WITHDRAWAL_KEYWORDS = ("출금", "출금액", "withdrawal", "출금금액")
 _DEPOSIT_KEYWORDS = ("입금", "입금액", "deposit", "입금금액")
 _AMOUNT_KEYWORDS = ("금액", "거래금액", "amount")
@@ -154,6 +179,15 @@ def _coerce_date(value: object) -> date | None:
         return None
     # Common Korean bank exports: "2026-04-29", "2026.04.29", "20260429", and
     # datetime variants like KB's "2026.06.07 16:59:05" (거래일시 = date + time).
+    # Kakao Bank xlsx stores Excel strict-ISO datetimes (e.g. 2026-06-08T19:30:14).
+    if "T" in text:
+        date_part = text.split("T", 1)[0]
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"):
+            try:
+                return datetime.strptime(date_part, fmt).date()
+            except ValueError:
+                continue
+
     candidates = (
         "%Y-%m-%d",
         "%Y/%m/%d",
@@ -214,6 +248,10 @@ def _find_header_row(rows: Sequence[Sequence[object]]) -> tuple[int, dict[str, i
                 column_map["date"] = c_idx
             if "description" not in column_map and _header_matches(cell, _DESC_KEYWORDS):
                 column_map["description"] = c_idx
+            if "memo" not in column_map and _header_matches(cell, _MEMO_KEYWORDS):
+                column_map["memo"] = c_idx
+            if "type" not in column_map and _header_matches(cell, _TYPE_KEYWORDS):
+                column_map["type"] = c_idx
             if "withdrawal" not in column_map and matched_withdrawal:
                 column_map["withdrawal"] = c_idx
             if "deposit" not in column_map and matched_deposit:
@@ -243,17 +281,126 @@ def _find_header_row(rows: Sequence[Sequence[object]]) -> tuple[int, dict[str, i
     )
 
 
+def _column_index_from_cell_ref(ref: str) -> int:
+    """Convert an Excel cell ref (e.g. 'C12') to a 0-based column index."""
+    letters = "".join(ch for ch in ref if ch.isalpha())
+    index = 0
+    for ch in letters.upper():
+        index = index * 26 + (ord(ch) - ord("A") + 1)
+    return index - 1
+
+
+def _xlsx_shared_strings(zf: zipfile.ZipFile) -> list[str]:
+    if "xl/sharedStrings.xml" not in zf.namelist():
+        return []
+    root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+    strings: list[str] = []
+    for si in root.iter():
+        if not si.tag.endswith("}si") and si.tag != "si":
+            continue
+        parts: list[str] = []
+        for node in si.iter():
+            if node.tag.endswith("}t") or node.tag == "t":
+                if node.text:
+                    parts.append(node.text)
+        strings.append("".join(parts))
+    return strings
+
+
+def _xlsx_cell_value(cell: ET.Element, shared_strings: Sequence[str]) -> object:
+    cell_type = cell.attrib.get("t")
+    value_node = None
+    for node in cell:
+        if node.tag.endswith("}v") or node.tag == "v":
+            value_node = node
+            break
+    if value_node is None or value_node.text is None:
+        return None
+    raw = value_node.text
+    if cell_type == "s":
+        return shared_strings[int(raw)]
+    if cell_type == "d":
+        return raw
+    if cell_type == "inlineStr":
+        for node in cell:
+            if node.tag.endswith("}t") or node.tag == "t":
+                return node.text
+        return None
+    try:
+        if "." in raw:
+            return float(raw)
+        return int(raw)
+    except ValueError:
+        return raw
+
+
+def _read_rows_xlsx_via_xml(file_bytes: bytes) -> list[list[object]]:
+    """Fallback reader for strict-OOXML exports (e.g. Kakao Bank email xlsx).
+
+    Some bank exports use the `purl.oclc.org` namespace that openpyxl does not
+    load as worksheets, leaving `wb.sheetnames` empty even though sheet1.xml
+    contains the transaction table.
+    """
+    try:
+        with zipfile.ZipFile(BytesIO(file_bytes)) as zf:
+            sheet_name = next(
+                (name for name in zf.namelist() if name.startswith("xl/worksheets/sheet")),
+                None,
+            )
+            if sheet_name is None:
+                return []
+            shared_strings = _xlsx_shared_strings(zf)
+            root = ET.fromstring(zf.read(sheet_name))
+    except (KeyError, OSError, ET.ParseError, zipfile.BadZipFile, ValueError) as exc:
+        raise BankStatementParseError(f"엑셀 파일을 열 수 없습니다: {exc}") from exc
+
+    sparse_rows: dict[int, dict[int, object]] = {}
+    max_col = 0
+    for row_el in root.iter():
+        if not (row_el.tag.endswith("}row") or row_el.tag == "row"):
+            continue
+        row_idx = int(row_el.attrib.get("r", "0")) - 1
+        if row_idx < 0:
+            continue
+        for cell in row_el:
+            if not (cell.tag.endswith("}c") or cell.tag == "c"):
+                continue
+            ref = cell.attrib.get("r", "")
+            if not ref:
+                continue
+            col_idx = _column_index_from_cell_ref(ref)
+            sparse_rows.setdefault(row_idx, {})[col_idx] = _xlsx_cell_value(
+                cell, shared_strings
+            )
+            max_col = max(max_col, col_idx)
+
+    if not sparse_rows:
+        return []
+
+    rows: list[list[object]] = []
+    for row_idx in sorted(sparse_rows):
+        row_map = sparse_rows[row_idx]
+        rows.append([row_map.get(col) for col in range(max_col + 1)])
+    return rows
+
+
 def _read_rows_xlsx(file_bytes: bytes) -> list[list[object]]:
+    rows: list[list[object]] = []
     try:
         wb = load_workbook(BytesIO(file_bytes), data_only=True, read_only=True)
     except (InvalidFileException, KeyError, OSError) as exc:
         raise BankStatementParseError(f"엑셀 파일을 열 수 없습니다: {exc}") from exc
-    sheet = wb.active
-    if sheet is None:
+    try:
+        if wb.sheetnames:
+            sheet = wb[wb.sheetnames[0]]
+            rows = [list(row) for row in sheet.iter_rows(values_only=True)]
+    finally:
+        wb.close()
+
+    if not rows:
+        rows = _read_rows_xlsx_via_xml(file_bytes)
+    if not rows:
         raise BankStatementParseError("엑셀에 시트가 없습니다.")
-    # Read everything up-front; bank statements are typically <10k rows.
-    rows = [list(row) for row in sheet.iter_rows(values_only=True)]
-    wb.close()
     return rows
 
 
@@ -306,6 +453,10 @@ def parse_bank_statement_bytes(file_bytes: bytes) -> list[ParsedTransaction]:
 
         description_raw = _safe_get(row, columns.get("description"))
         description = str(description_raw).strip() if description_raw is not None else ""
+        memo_raw = _safe_get(row, columns.get("memo"))
+        memo = str(memo_raw).strip() if memo_raw is not None else ""
+        if memo:
+            description = f"{description} ({memo})" if description else memo
 
         amount = _resolve_amount(row, columns)
         if amount is None:
@@ -330,9 +481,21 @@ def _safe_get(row: Sequence[object], idx: int | None) -> object:
 
 def _resolve_amount(row: Sequence[object], columns: dict[str, int]) -> Decimal | None:
     """Resolve a single signed Decimal from either:
-      - a single `amount` column (used as-is), or
+      - a Kakao-style `구분` + `거래금액` pair (출금 → negative),
+      - a single signed `amount` column (used as-is), or
       - a withdrawal/deposit pair (withdrawal becomes negative).
     """
+    if "type" in columns and "amount" in columns:
+        type_text = str(_safe_get(row, columns["type"]) or "").strip()
+        amount = _coerce_decimal(_safe_get(row, columns["amount"]))
+        if amount is None:
+            return None
+        if "출금" in type_text:
+            return -abs(amount)
+        if "입금" in type_text:
+            return abs(amount)
+        return amount
+
     if "amount" in columns:
         return _coerce_decimal(_safe_get(row, columns["amount"]))
 
