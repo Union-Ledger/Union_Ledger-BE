@@ -40,14 +40,14 @@ from union_ledger.services.organization import (
 router = APIRouter(tags=["invitations"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
-AdminOnly = Annotated[
+PresidentOnly = Annotated[
     OrganizationMembership,
-    Depends(require_roles_in_org(RoleType.ADMIN)),
+    Depends(require_roles_in_org(RoleType.PRESIDENT)),
 ]
 CurrentRoleHolder = Annotated[
     OrganizationMembership,
     Depends(
-        require_roles_in_org(RoleType.TREASURER, RoleType.AUDITOR, RoleType.ADMIN),
+        require_roles_in_org(RoleType.TREASURER, RoleType.AUDITOR, RoleType.PRESIDENT),
     ),
 ]
 
@@ -77,7 +77,7 @@ def _to_response(
 async def create_invitation(
     organization_id: uuid.UUID,
     payload: InvitationCreateRequest,
-    _membership: AdminOnly,
+    _membership: PresidentOnly,
     session: DbSession,
 ) -> InvitationResponse:
     if payload.invitation_type == InvitationType.ROLE_TRANSFER:
@@ -115,7 +115,7 @@ async def create_invitation(
 )
 async def list_org_invitations(
     organization_id: uuid.UUID,
-    _membership: AdminOnly,
+    _membership: PresidentOnly,
     session: DbSession,
 ) -> list[InvitationResponse]:
     items = await list_invitations(session, organization_id=organization_id)
@@ -131,7 +131,7 @@ async def list_org_invitations(
 async def revoke_org_invitation(
     organization_id: uuid.UUID,
     invitation_id: uuid.UUID,
-    _membership: AdminOnly,
+    _membership: PresidentOnly,
     session: DbSession,
 ) -> InvitationResponse:
     try:

@@ -71,7 +71,7 @@ async def run_match(
         session,
         user_id=current_user.id,
         organization_id=settlement.organization_id,
-        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
     summary = await run_reconciliation(session, settlement_id=settlement.id)
     return ReconciliationRunResponse(
@@ -140,7 +140,7 @@ async def patch_match(
         session,
         user_id=current_user.id,
         organization_id=settlement.organization_id,
-        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
 
     updates = payload.model_dump(exclude_unset=True)

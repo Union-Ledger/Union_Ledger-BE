@@ -35,7 +35,7 @@ from union_ledger.models.enums import MatchStatus, RoleType, SettlementStatus
 
 # Roles that get the treasurer dashboard. Admins manage the org and need
 # the same visibility, so we lump them in.
-_TREASURER_DASHBOARD_ROLES = {RoleType.TREASURER, RoleType.ADMIN}
+_TREASURER_DASHBOARD_ROLES = {RoleType.TREASURER, RoleType.PRESIDENT}
 
 # Reconciliation statuses that count as "matched" for progress %.
 _MATCHED_LIKE = {MatchStatus.MATCHED, MatchStatus.MANUALLY_RESOLVED}

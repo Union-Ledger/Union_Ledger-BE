@@ -32,9 +32,9 @@ router = APIRouter(tags=["organizations"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
 AnyMember = Annotated[OrganizationMembership, Depends(require_roles_in_org())]
-AdminOnly = Annotated[
+PresidentOnly = Annotated[
     OrganizationMembership,
-    Depends(require_roles_in_org(RoleType.ADMIN)),
+    Depends(require_roles_in_org(RoleType.PRESIDENT)),
 ]
 
 
@@ -102,7 +102,7 @@ async def get_org(
 )
 async def list_org_members(
     organization_id: uuid.UUID,
-    _membership: AdminOnly,
+    _membership: PresidentOnly,
     session: DbSession,
 ) -> list[OrganizationMemberResponse]:
     memberships = await list_memberships(session, organization_id)

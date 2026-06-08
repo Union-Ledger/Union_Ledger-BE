@@ -49,7 +49,7 @@ router = APIRouter(tags=["settlements"])
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
 TreasurerOrAdmin = Annotated[
     OrganizationMembership,
-    Depends(require_roles_in_org(RoleType.TREASURER, RoleType.ADMIN)),
+    Depends(require_roles_in_org(RoleType.TREASURER, RoleType.PRESIDENT)),
 ]
 AnyOrgMember = Annotated[
     OrganizationMembership,
@@ -200,7 +200,7 @@ async def patch_settlement(
         session,
         user_id=current_user.id,
         organization_id=settlement.organization_id,
-        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
 
     updates = payload.model_dump(exclude_unset=True)

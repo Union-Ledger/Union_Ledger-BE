@@ -68,7 +68,7 @@ async def test_operator_creates_org_and_becomes_admin(client: AsyncClient) -> No
 
     me = await client.get("/api/v1/auth/me", headers=op_headers)
     assert me.status_code == 200
-    assert set(me.json()["roles"]) == {"admin"}
+    assert set(me.json()["roles"]) == {"president"}
 
 
 async def test_create_organization_requires_operator(client: AsyncClient) -> None:
@@ -169,7 +169,7 @@ async def test_list_members_admin_only(client: AsyncClient) -> None:
     assert ok.status_code == 200
     members = ok.json()
     assert len(members) == 1
-    assert members[0]["role"] == "admin"
+    assert members[0]["role"] == "president"
     assert members[0]["user"]["email"] == "admin1@konkuk.ac.kr"
     assert members[0]["is_primary"] is True
 

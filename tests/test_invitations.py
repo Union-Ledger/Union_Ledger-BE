@@ -147,7 +147,7 @@ async def test_issue_invitation_rejects_role_transfer_type(
         json={
             "invitation_type": "role_transfer",
             "invited_email": "successor@konkuk.ac.kr",
-            "role": "admin",
+            "role": "president",
         },
     )
     assert resp.status_code == 400, resp.text

@@ -211,7 +211,7 @@ async def notify_audit_approved(
     return await fanout_to_org_roles(
         session,
         organization_id=settlement.organization_id,
-        roles={RoleType.TREASURER, RoleType.ADMIN},
+        roles={RoleType.TREASURER, RoleType.PRESIDENT},
         notification_type=NotificationType.AUDIT_APPROVED,
         title="결산안이 승인되었습니다",
         body=f"{label} 의 감사가 승인되었습니다.",
@@ -229,7 +229,7 @@ async def notify_audit_rejected(
     return await fanout_to_org_roles(
         session,
         organization_id=settlement.organization_id,
-        roles={RoleType.TREASURER, RoleType.ADMIN},
+        roles={RoleType.TREASURER, RoleType.PRESIDENT},
         notification_type=NotificationType.AUDIT_REJECTED,
         title="결산안이 반려되었습니다",
         body=f"{label} 가 반려되었습니다. 감사 코멘트를 확인해주세요.",
@@ -255,7 +255,7 @@ async def notify_settlement_published(
     return await fanout_to_org_roles(
         session,
         organization_id=settlement.organization_id,
-        roles={RoleType.STUDENT, RoleType.TREASURER, RoleType.AUDITOR, RoleType.ADMIN},
+        roles={RoleType.STUDENT, RoleType.TREASURER, RoleType.AUDITOR, RoleType.PRESIDENT},
         notification_type=NotificationType.SETTLEMENT_PUBLISHED,
         title="결산안이 공개되었습니다",
         body=f"{label} 가 공개되었습니다. 자세한 내용을 확인해보세요.",

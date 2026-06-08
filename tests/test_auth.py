@@ -189,7 +189,7 @@ async def test_me_reflects_memberships(client: AsyncClient) -> None:
     await create_org_as_admin(client, headers)
     after = await client.get("/api/v1/auth/me", headers=headers)
     assert after.status_code == 200
-    assert after.json()["roles"] == ["admin"]
+    assert after.json()["roles"] == ["president"]
 
 
 # --- Operators (allowlist) may use a non-konkuk email --------------------

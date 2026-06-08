@@ -53,7 +53,7 @@ async def create_organization(
     membership = OrganizationMembership(
         organization_id=organization.id,
         user_id=creator_id,
-        role=RoleType.ADMIN,
+        role=RoleType.PRESIDENT,
         is_primary=True,
     )
     session.add(membership)

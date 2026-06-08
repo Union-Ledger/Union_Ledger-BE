@@ -53,7 +53,7 @@ router = APIRouter(tags=["settlement-templates"])
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
 TreasurerOrAdmin = Annotated[
     OrganizationMembership,
-    Depends(require_roles_in_org(RoleType.TREASURER, RoleType.ADMIN)),
+    Depends(require_roles_in_org(RoleType.TREASURER, RoleType.PRESIDENT)),
 ]
 AnyOrgMember = Annotated[
     OrganizationMembership,
@@ -193,7 +193,7 @@ async def patch_template(
         session,
         user_id=current_user.id,
         organization_id=template.organization_id,
-        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
 
     updates = payload.model_dump(exclude_unset=True)
@@ -230,7 +230,7 @@ async def deactivate_template(
         session,
         user_id=current_user.id,
         organization_id=template.organization_id,
-        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
 
     template = await update_template(

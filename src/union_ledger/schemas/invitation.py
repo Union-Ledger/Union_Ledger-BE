@@ -29,7 +29,7 @@ class InvitationCreateRequest(BaseModel):
         if self.invitation_type == InvitationType.ROLE_TRANSFER and self.role not in {
             RoleType.TREASURER,
             RoleType.AUDITOR,
-            RoleType.ADMIN,
+            RoleType.PRESIDENT,
         }:
             raise ValueError("권한 이전은 treasurer/auditor/admin 만 지원됩니다.")
         return self

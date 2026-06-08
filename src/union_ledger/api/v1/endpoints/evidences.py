@@ -45,7 +45,7 @@ async def preview_evidence_extraction(
     file: Annotated[UploadFile, File()],
     current_user: Annotated[
         AuthUser,
-        Depends(require_roles(RoleType.TREASURER, RoleType.ADMIN)),
+        Depends(require_roles(RoleType.TREASURER, RoleType.PRESIDENT)),
     ],
 ) -> OCRPreviewResponse:
     del current_user
@@ -107,7 +107,7 @@ async def upload_evidence(
         session,
         user_id=current_user.id,
         organization_id=settlement.organization_id,
-        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
 
     storage = LocalFileStorage(get_settings())
@@ -200,7 +200,7 @@ async def extract_evidence(
         session,
         user_id=current_user.id,
         organization_id=evidence.organization_id,
-        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
     evidence.status = EvidenceStatus.EXTRACTING
     await session.commit()
@@ -257,7 +257,7 @@ async def update_evidence(
         session,
         user_id=current_user.id,
         organization_id=evidence.organization_id,
-        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
 
     if "evidence_date" in payload.model_fields_set:

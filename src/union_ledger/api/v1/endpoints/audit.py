@@ -127,7 +127,7 @@ async def submit(
         session,
         user_id=current_user.id,
         organization_id=settlement.organization_id,
-        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
     try:
         settlement = await submit_settlement(session, settlement=settlement)
@@ -155,7 +155,7 @@ async def resubmit(
         session,
         user_id=current_user.id,
         organization_id=settlement.organization_id,
-        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
     try:
         settlement = await resubmit_settlement(session, settlement=settlement)
@@ -262,7 +262,7 @@ async def publish(
         session,
         user_id=current_user.id,
         organization_id=settlement.organization_id,
-        allowed_roles={RoleType.ADMIN},
+        allowed_roles={RoleType.PRESIDENT},
     )
     try:
         settlement = await publish_settlement(session, settlement=settlement)

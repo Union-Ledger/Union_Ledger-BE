@@ -77,7 +77,7 @@ async def generate_artifacts(
         session,
         user_id=current_user.id,
         organization_id=settlement.organization_id,
-        allowed_roles={RoleType.TREASURER, RoleType.ADMIN},
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
 
     # Run the IO-heavy work off the event loop. The orchestrator itself does

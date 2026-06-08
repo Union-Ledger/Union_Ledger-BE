@@ -5,7 +5,7 @@ class RoleType(StrEnum):
     STUDENT = "student"
     TREASURER = "treasurer"
     AUDITOR = "auditor"
-    ADMIN = "admin"
+    PRESIDENT = "president"
 
 
 class InvitationType(StrEnum):

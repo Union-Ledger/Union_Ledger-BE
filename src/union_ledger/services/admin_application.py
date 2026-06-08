@@ -137,7 +137,7 @@ async def approve_application(
         OrganizationMembership(
             organization_id=organization.id,
             user_id=application.applicant_user_id,
-            role=RoleType.ADMIN,
+            role=RoleType.PRESIDENT,
             is_primary=True,
         )
     )
