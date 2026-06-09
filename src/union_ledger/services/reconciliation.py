@@ -40,6 +40,7 @@ from union_ledger.models.entities import (
     ReconciliationResult,
 )
 from union_ledger.models.enums import EvidenceStatus, MatchStatus
+from union_ledger.schemas.reconciliation import ReconciliationResultResponse
 
 
 class ReconciliationError(Exception):
@@ -209,6 +210,51 @@ async def run_reconciliation(
         missing_evidence=len(missing_evidence),
         results=all_results,
     )
+
+
+async def build_result_responses(
+    session: AsyncSession,
+    results: Sequence[ReconciliationResult],
+) -> list[ReconciliationResultResponse]:
+    """Attach evidence/bank merchant labels for API responses."""
+    if not results:
+        return []
+
+    evidence_ids = {row.evidence_id for row in results if row.evidence_id is not None}
+    bank_ids = {
+        row.bank_transaction_id for row in results if row.bank_transaction_id is not None
+    }
+
+    evidence_names: dict[uuid.UUID, str | None] = {}
+    if evidence_ids:
+        evidence_rows = await session.scalars(
+            select(Evidence).where(Evidence.id.in_(evidence_ids))
+        )
+        evidence_names = {
+            evidence.id: evidence.merchant_name for evidence in evidence_rows.all()
+        }
+
+    bank_names: dict[uuid.UUID, str] = {}
+    if bank_ids:
+        bank_rows = await session.scalars(
+            select(BankTransaction).where(BankTransaction.id.in_(bank_ids))
+        )
+        bank_names = {tx.id: tx.description for tx in bank_rows.all()}
+
+    return [
+        ReconciliationResultResponse.from_result(
+            row,
+            evidence_merchant_name=(
+                evidence_names.get(row.evidence_id) if row.evidence_id else None
+            ),
+            bank_merchant_name=(
+                bank_names.get(row.bank_transaction_id)
+                if row.bank_transaction_id
+                else None
+            ),
+        )
+        for row in results
+    ]
 
 
 async def list_results(

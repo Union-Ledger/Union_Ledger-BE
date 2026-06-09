@@ -16,6 +16,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from union_ledger.models.entities import ReconciliationResult
 from union_ledger.models.enums import MatchStatus
 
 
@@ -26,10 +27,36 @@ class ReconciliationResultResponse(BaseModel):
     bank_transaction_id: uuid.UUID | None
     status: MatchStatus
     notes: str | None
+    evidence_merchant_name: str | None = None
+    bank_merchant_name: str | None = None
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @classmethod
+    def from_result(
+        cls,
+        result: ReconciliationResult,
+        *,
+        evidence_merchant_name: str | None = None,
+        bank_merchant_name: str | None = None,
+    ) -> ReconciliationResultResponse:
+        """Build a response row with optional joined merchant labels."""
+        return cls.model_validate(
+            {
+                "id": result.id,
+                "settlement_id": result.settlement_id,
+                "evidence_id": result.evidence_id,
+                "bank_transaction_id": result.bank_transaction_id,
+                "status": result.status,
+                "notes": result.notes,
+                "evidence_merchant_name": evidence_merchant_name,
+                "bank_merchant_name": bank_merchant_name,
+                "created_at": result.created_at,
+                "updated_at": result.updated_at,
+            }
+        )
 
 
 class ReconciliationRunResponse(BaseModel):

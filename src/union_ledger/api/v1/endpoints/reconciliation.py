@@ -30,6 +30,7 @@ from union_ledger.schemas.reconciliation import (
 from union_ledger.services.reconciliation import (
     ReconciliationResultMismatch,
     ReconciliationResultNotFound,
+    build_result_responses,
     get_result_or_raise,
     list_results,
     run_reconciliation,
@@ -74,6 +75,7 @@ async def run_match(
         allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
     summary = await run_reconciliation(session, settlement_id=settlement.id)
+    result_rows = await build_result_responses(session, summary.results)
     return ReconciliationRunResponse(
         settlement_id=summary.settlement_id,
         total=summary.total,
@@ -82,9 +84,7 @@ async def run_match(
         date_mismatch=summary.date_mismatch,
         missing_bank_transaction=summary.missing_bank_transaction,
         missing_evidence=summary.missing_evidence,
-        results=[
-            ReconciliationResultResponse.model_validate(row) for row in summary.results
-        ],
+        results=result_rows,
     )
 
 
@@ -113,7 +113,7 @@ async def list_settlement_results(
         settlement_id=settlement.id,
         status_filter=status_filter,
     )
-    return [ReconciliationResultResponse.model_validate(r) for r in rows]
+    return await build_result_responses(session, rows)
 
 
 @router.patch(
@@ -145,7 +145,7 @@ async def patch_match(
 
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
-        return ReconciliationResultResponse.model_validate(result)
+        return (await build_result_responses(session, [result]))[0]
 
     try:
         result = await update_result(session, result=result, updates=updates)
@@ -154,4 +154,4 @@ async def patch_match(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
-    return ReconciliationResultResponse.model_validate(result)
+    return (await build_result_responses(session, [result]))[0]

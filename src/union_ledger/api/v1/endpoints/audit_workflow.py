@@ -41,7 +41,6 @@ from union_ledger.schemas.audit_workflow import (
 from union_ledger.schemas.auth_response import AuthUser
 from union_ledger.schemas.bank_statement import BankTransactionResponse
 from union_ledger.schemas.evidence import EvidenceResponse
-from union_ledger.schemas.reconciliation import ReconciliationResultResponse
 from union_ledger.schemas.settlement import SettlementResponse
 from union_ledger.services.audit_workflow import (
     CommentNotEditableByUser,
@@ -50,6 +49,7 @@ from union_ledger.services.audit_workflow import (
     list_auditor_worklist,
     update_comment,
 )
+from union_ledger.services.reconciliation import build_result_responses
 from union_ledger.services.settlement import (
     SettlementNotFound,
     get_settlement_or_raise,
@@ -154,6 +154,9 @@ async def get_review(
     )
 
     bundle = await get_review_bundle(session, settlement=settlement)
+    reconciliation_results = await build_result_responses(
+        session, bundle.reconciliation_results
+    )
     return AuditReviewBundle(
         settlement=SettlementResponse.model_validate(bundle.settlement),
         evidences=[EvidenceResponse.model_validate(e) for e in bundle.evidences],
@@ -161,10 +164,7 @@ async def get_review(
             BankTransactionResponse.model_validate(tx)
             for tx in bundle.bank_transactions
         ],
-        reconciliation_results=[
-            ReconciliationResultResponse.model_validate(r)
-            for r in bundle.reconciliation_results
-        ],
+        reconciliation_results=reconciliation_results,
         comments=[AuditCommentResponse.model_validate(c) for c in bundle.comments],
     )
 
