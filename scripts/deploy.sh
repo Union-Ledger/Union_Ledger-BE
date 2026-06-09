@@ -37,10 +37,10 @@ if [[ -z "${DEPLOY_HOST:-}" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${ROOT_DIR}/.env" ]]; then
-  echo "Missing ${ROOT_DIR}/.env — copy from .env.production.example and edit." >&2
-  exit 1
-fi
+# Production secrets live ONLY on the server (${REMOTE_DIR}/.env) and are never
+# synced from a dev machine (see rsync --exclude '.env' below), so a local/dev
+# .env can't clobber prod. To change server env, edit ${REMOTE_DIR}/.env on EC2
+# (or scp it once for first-time setup).
 
 SSH_OPTS=(-i "${DEPLOY_KEY}" -o StrictHostKeyChecking=accept-new)
 
@@ -71,6 +71,7 @@ rsync -az --delete \
   --exclude 'terraform/*.tfstate*' \
   --exclude 'terraform/terraform.tfvars' \
   --exclude '.env.example' \
+  --exclude '.env' \
   "${ROOT_DIR}/" "${SSH_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/"
 
 echo "==> Docker build & up"
