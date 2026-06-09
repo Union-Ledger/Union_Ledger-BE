@@ -2,8 +2,15 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# Known placeholder/default JWT secrets that must never be used in production.
+_INSECURE_JWT_SECRETS = {
+    "",
+    "change-me-in-env",
+    "change-me-long-random-secret",
+}
 
 
 class Settings(BaseSettings):
@@ -110,6 +117,22 @@ class Settings(BaseSettings):
         if value and smtp_use_tls:
             raise ValueError("SMTP_USE_SSL and SMTP_USE_TLS cannot both be true")
         return value
+
+    @model_validator(mode="after")
+    def require_strong_secret_in_production(self) -> "Settings":
+        """Fail fast if a production deploy is left with a default/weak JWT
+        secret — otherwise tokens would be signed with a guessable key and any
+        user_id/role could be forged. Only enforced when ENVIRONMENT=production,
+        so local/test runs (default 'local') are unaffected."""
+        if self.environment.strip().lower() in {"production", "prod"}:
+            secret = self.jwt_secret_key.strip()
+            if secret in _INSECURE_JWT_SECRETS or len(secret) < 16:
+                raise ValueError(
+                    "JWT_SECRET_KEY must be a strong, non-default value in "
+                    "production. Set the JWT_SECRET_KEY env var to a long "
+                    "random string (>= 16 chars)."
+                )
+        return self
 
     model_config = SettingsConfigDict(
         env_file=".env",
