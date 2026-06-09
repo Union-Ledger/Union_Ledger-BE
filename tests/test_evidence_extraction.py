@@ -482,3 +482,11 @@ def test_expense_categories_endpoint_lists_fixed_set() -> None:
     assert resp.status_code == 200, resp.text
     categories = resp.json()["categories"]
     assert "식비" in categories and "기타" in categories
+
+
+def test_gemini_detects_refund() -> None:
+    # is_refund: bool / string-coerced / missing → False. amount stays positive.
+    assert gemini_json_to_fields({"is_refund": True, "total_amount": 5000}).is_refund is True
+    assert gemini_json_to_fields({"is_refund": False}).is_refund is False
+    assert gemini_json_to_fields({"is_refund": "true"}).is_refund is True
+    assert gemini_json_to_fields({"merchant_name": "X"}).is_refund is False

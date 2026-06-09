@@ -179,7 +179,8 @@ def _compute_spec_fields(snapshot: _SettlementSnapshot) -> dict[str, Any]:
     total_amount = Decimal(0)
     for ev in snapshot.evidences:
         if ev.amount is not None:
-            total_amount += abs(ev.amount)
+            # Refunds (환불) subtract so the artifact total nets out.
+            total_amount += -abs(ev.amount) if ev.is_refund else abs(ev.amount)
 
     rec_counts = {status: 0 for status in MatchStatus}
     for r in snapshot.reconciliation:

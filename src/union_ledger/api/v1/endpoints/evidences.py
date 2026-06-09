@@ -24,16 +24,16 @@ from union_ledger.schemas.evidence import (
     EvidenceUpdateRequest,
     OCRPreviewResponse,
 )
+from union_ledger.services.evidence import (
+    EvidenceNotFound,
+    delete_evidence,
+    get_evidence_or_raise,
+)
 from union_ledger.services.evidence_extraction import (
     RECEIPT_CATEGORIES,
     EvidenceExtractionService,
     ExtractionConfigurationError,
     ExtractionError,
-)
-from union_ledger.services.evidence import (
-    EvidenceNotFound,
-    delete_evidence,
-    get_evidence_or_raise,
 )
 from union_ledger.services.file_storage import LocalFileStorage
 
@@ -99,6 +99,7 @@ async def preview_evidence_extraction(
         merchant_name=result.merchant_name,
         amount=result.amount,
         payment_method=result.payment_method,
+        is_refund=result.is_refund,
     )
 
 
@@ -254,6 +255,7 @@ async def extract_evidence(
     evidence.merchant_name = result.merchant_name
     evidence.amount = result.amount
     evidence.payment_method = result.payment_method
+    evidence.is_refund = result.is_refund
     # Auto-fill the LLM-inferred category, but never overwrite a category the
     # treasurer already set by hand (the FE may submit one on upload).
     if result.budget_category and not evidence.budget_category:
@@ -292,6 +294,8 @@ async def update_evidence(
         evidence.payment_method = payload.payment_method
     if "budget_category" in payload.model_fields_set:
         evidence.budget_category = payload.budget_category
+    if "is_refund" in payload.model_fields_set and payload.is_refund is not None:
+        evidence.is_refund = payload.is_refund
     if "status" in payload.model_fields_set and payload.status is not None:
         evidence.status = payload.status
     if "extracted_payload" in payload.model_fields_set and payload.extracted_payload is not None:

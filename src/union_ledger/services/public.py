@@ -29,6 +29,7 @@ from union_ledger.models.entities import (
     OrganizationMembership,
     Settlement,
     SettlementArtifact,
+    evidence_signed_amount,
 )
 from union_ledger.models.enums import ArtifactStatus, SettlementStatus
 
@@ -98,7 +99,7 @@ async def _settlement_aggregates(
     rows = await session.execute(
         select(
             Evidence.settlement_id,
-            func.coalesce(func.sum(func.abs(Evidence.amount)), 0),
+            func.coalesce(func.sum(evidence_signed_amount()), 0),
             func.count(Evidence.id),
         )
         .where(Evidence.settlement_id.in_(settlement_ids))

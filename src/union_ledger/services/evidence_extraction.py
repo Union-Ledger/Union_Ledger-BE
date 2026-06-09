@@ -264,6 +264,7 @@ class ParsedEvidenceFields:
     payment_method: PaymentMethod | None
     confidence: float
     budget_category: str | None = None
+    is_refund: bool = False
 
 
 @dataclass(slots=True)
@@ -304,6 +305,7 @@ class ExtractionResult:
     payment_method: PaymentMethod | None
     payload: dict[str, Any]
     budget_category: str | None = None
+    is_refund: bool = False
 
 
 @dataclass(slots=True)
@@ -606,11 +608,14 @@ _GEMINI_RECEIPT_PROMPT = (
     "JSON 객체로만 답하세요(설명/마크다운 금지):\n"
     '{"merchant_name": 상호명 문자열 또는 null, '
     '"date": 거래일자 "YYYY-MM-DD" 또는 null, '
-    '"total_amount": 최종 결제금액 숫자(통화기호·콤마 없이) 또는 null, '
-    '"category": 아래 목록 중 정확히 하나}\n'
+    '"total_amount": 금액 숫자(통화기호·콤마 없이, 항상 양수) 또는 null, '
+    '"category": 아래 목록 중 정확히 하나, '
+    '"is_refund": 환불/취소/반품 영수증이면 true 아니면 false}\n'
     "category는 반드시 다음 중에서만 고르세요: " + ", ".join(RECEIPT_CATEGORIES) + ". "
     "적합한 게 없으면 \"기타\". "
-    "부가세·소계가 아닌 최종 결제금액을 total_amount로 쓰세요."
+    "부가세·소계가 아닌 최종 결제금액을 total_amount로 쓰세요. "
+    "환불·취소·반품 영수증이면 is_refund=true로 하고, total_amount는 환불 금액을 "
+    "양수로 적으세요(부호는 시스템이 처리)."
 )
 
 _GEMINI_MIME_TYPES = {
@@ -747,6 +752,12 @@ def gemini_json_to_fields(data: dict[str, Any]) -> ParsedEvidenceFields:
         # LLM returned something off-list → bucket as 기타 so the rollup stays clean.
         budget_category = "기타"
 
+    raw_refund = data.get("is_refund")
+    if isinstance(raw_refund, str):
+        is_refund = raw_refund.strip().lower() in {"true", "1", "yes", "y", "t"}
+    else:
+        is_refund = bool(raw_refund)
+
     confidence = round(
         0.4 * (amount is not None)
         + 0.3 * (evidence_date is not None)
@@ -760,6 +771,7 @@ def gemini_json_to_fields(data: dict[str, Any]) -> ParsedEvidenceFields:
         payment_method=None,
         confidence=confidence,
         budget_category=budget_category,
+        is_refund=is_refund,
     )
 
 
@@ -888,6 +900,7 @@ class EvidenceExtractionService:
             payment_method=parsed.payment_method,
             payload=payload,
             budget_category=parsed.budget_category,
+            is_refund=parsed.is_refund,
         )
 
     def _extract_image_clova(
@@ -2345,6 +2358,7 @@ def _serialize_parsed_fields(fields: ParsedEvidenceFields) -> dict[str, Any]:
         "amount": str(fields.amount) if fields.amount is not None else None,
         "payment_method": fields.payment_method.value if fields.payment_method else None,
         "budget_category": fields.budget_category,
+        "is_refund": fields.is_refund,
         "confidence": round(fields.confidence, 4),
     }
 

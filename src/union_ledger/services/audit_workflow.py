@@ -28,6 +28,7 @@ from union_ledger.models.entities import (
     OrganizationMembership,
     ReconciliationResult,
     Settlement,
+    evidence_signed_amount,
 )
 from union_ledger.models.enums import MatchStatus, RoleType, SettlementStatus
 
@@ -131,7 +132,7 @@ async def list_auditor_worklist(
         select(
             Evidence.settlement_id,
             func.count(Evidence.id),
-            func.coalesce(func.sum(func.abs(Evidence.amount)), 0),
+            func.coalesce(func.sum(evidence_signed_amount()), 0),
         ).where(Evidence.settlement_id.in_(settlement_ids))
         .group_by(Evidence.settlement_id)
     )

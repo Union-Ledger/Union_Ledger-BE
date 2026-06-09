@@ -256,8 +256,26 @@ class Evidence(TimestampedUUIDModel):
         _enum_column(PaymentMethod, "payment_method")
     )
     budget_category: Mapped[str | None] = mapped_column(String(120))
+    # Refund/cancellation receipt (환불·취소·반품). Amount stays a positive
+    # magnitude; aggregations subtract it so settlement totals net out.
+    is_refund: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     settlement: Mapped[Settlement] = relationship(back_populates="evidences")
+
+
+def evidence_signed_amount():
+    """SQLAlchemy expression for an evidence's signed amount.
+
+    Amounts are stored as positive magnitudes; a refund (is_refund) counts as
+    negative so settlement/dashboard rollups net refunds out instead of
+    inflating the total. Use inside ``func.sum(...)``.
+    """
+    from sqlalchemy import case, func
+
+    return case(
+        (Evidence.is_refund, -func.abs(Evidence.amount)),
+        else_=func.abs(Evidence.amount),
+    )
 
 
 class BankStatementUpload(TimestampedUUIDModel):

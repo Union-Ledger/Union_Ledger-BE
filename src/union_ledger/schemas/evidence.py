@@ -25,6 +25,7 @@ class EvidenceResponse(BaseModel):
     amount: Decimal | None
     payment_method: PaymentMethod | None
     budget_category: str | None
+    is_refund: bool
     created_at: datetime
     updated_at: datetime
 
@@ -37,6 +38,7 @@ class EvidenceUpdateRequest(BaseModel):
     amount: Decimal | None = None
     payment_method: PaymentMethod | None = None
     budget_category: str | None = None
+    is_refund: bool | None = None
     status: EvidenceStatus | None = None
     extracted_payload: dict[str, Any] | None = None
 
@@ -51,4 +53,5 @@ class OCRPreviewResponse(BaseModel):
     merchant_name: str | None
     amount: Decimal | None
     payment_method: PaymentMethod | None
+    is_refund: bool = False
 

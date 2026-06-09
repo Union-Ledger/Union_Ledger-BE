@@ -18,7 +18,12 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from union_ledger.models.entities import Evidence, Settlement, SettlementTemplate
+from union_ledger.models.entities import (
+    Evidence,
+    Settlement,
+    SettlementTemplate,
+    evidence_signed_amount,
+)
 from union_ledger.models.enums import SettlementStatus
 
 
@@ -118,15 +123,14 @@ async def get_settlement_expense_summary(
     """Aggregate the settlement's evidences into total + per-category rollup.
 
     A single GROUP BY query — also covers the "no evidences yet" case (returns
-    empty list and zero totals). Amounts use `abs()` to match the dashboard's
-    convention of treating refunds as positive expense contributions; revisit
-    if/when we model refunds explicitly.
+    empty list and zero totals). Uses ``evidence_signed_amount()`` so refunds
+    (is_refund) subtract and the per-category / total figures are net spend.
     """
     stmt = (
         select(
             Evidence.budget_category,
             func.count(Evidence.id),
-            func.coalesce(func.sum(func.abs(Evidence.amount)), 0),
+            func.coalesce(func.sum(evidence_signed_amount()), 0),
         )
         .where(Evidence.settlement_id == settlement.id)
         .group_by(Evidence.budget_category)
