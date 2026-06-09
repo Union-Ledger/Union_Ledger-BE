@@ -41,11 +41,15 @@ import xlrd
 from fastapi import UploadFile
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from union_ledger.core.config import Settings
-from union_ledger.models.entities import BankStatementUpload, BankTransaction
+from union_ledger.models.entities import (
+    BankStatementUpload,
+    BankTransaction,
+    ReconciliationResult,
+)
 from union_ledger.models.enums import BankStatementStatus
 
 # .xls = legacy binary (KB·신한 등 일부 은행이 여전히 .xls로 내려줌), read via xlrd.
@@ -541,6 +545,42 @@ async def create_upload_with_transactions(
     await session.commit()
     await session.refresh(upload)
     return upload
+
+
+async def get_upload_or_raise(
+    session: AsyncSession, upload_id: uuid.UUID
+) -> BankStatementUpload:
+    upload = await session.get(BankStatementUpload, upload_id)
+    if upload is None:
+        raise BankStatementUploadNotFound("거래내역 업로드를 찾을 수 없습니다.")
+    return upload
+
+
+async def delete_bank_statement_upload(
+    session: AsyncSession,
+    *,
+    upload: BankStatementUpload,
+) -> None:
+    """Hard-delete one upload, its parsed rows, linked reconciliation rows, and file."""
+    tx_ids = list(
+        await session.scalars(
+            select(BankTransaction.id).where(BankTransaction.upload_id == upload.id)
+        )
+    )
+    if tx_ids:
+        await session.execute(
+            delete(ReconciliationResult).where(
+                ReconciliationResult.bank_transaction_id.in_(tx_ids)
+            )
+        )
+        await session.execute(
+            delete(BankTransaction).where(BankTransaction.upload_id == upload.id)
+        )
+
+    file_path = Path(upload.source_file_path)
+    await session.delete(upload)
+    await session.commit()
+    file_path.unlink(missing_ok=True)
 
 
 async def list_settlement_uploads(

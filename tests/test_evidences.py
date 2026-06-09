@@ -9,6 +9,7 @@ signup-org is not sufficient (mirrors the bank-statement auth tests).
 from __future__ import annotations
 
 import io
+import uuid
 
 from httpx import AsyncClient
 
@@ -138,6 +139,52 @@ async def test_non_member_cannot_patch_evidence(client: AsyncClient) -> None:
         json={"merchant_name": "무단수정"},
     )
     assert resp.status_code == 403, resp.text
+
+
+async def test_delete_evidence_removes_row_and_file(client: AsyncClient) -> None:
+    await signup(client, email="ev_del@konkuk.ac.kr")
+    headers = await auth_headers(client, "ev_del@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+    settlement = await _create_settlement(client, headers, org_id=org["id"])
+
+    up = await _upload_evidence(client, headers, settlement_id=settlement["id"])
+    assert up.status_code == 201, up.text
+    evidence_id = up.json()["id"]
+
+    del_resp = await client.delete(f"/api/v1/evidences/{evidence_id}", headers=headers)
+    assert del_resp.status_code == 204, del_resp.text
+
+    listing = await client.get(
+        f"/api/v1/settlements/{settlement['id']}/evidences", headers=headers
+    )
+    assert listing.status_code == 200
+    assert listing.json() == []
+
+    detail = await client.get(f"/api/v1/evidences/{evidence_id}", headers=headers)
+    assert detail.status_code == 404, detail.text
+
+
+async def test_non_member_cannot_delete_evidence(client: AsyncClient) -> None:
+    await signup(client, email="ev_del_owner@konkuk.ac.kr")
+    owner_headers = await auth_headers(client, "ev_del_owner@konkuk.ac.kr")
+    org = await create_org_as_admin(client, owner_headers)
+    settlement = await _create_settlement(client, owner_headers, org_id=org["id"])
+    up = await _upload_evidence(client, owner_headers, settlement_id=settlement["id"])
+    evidence_id = up.json()["id"]
+
+    await signup(client, email="ev_del_out@konkuk.ac.kr")
+    out_headers = await auth_headers(client, "ev_del_out@konkuk.ac.kr")
+
+    resp = await client.delete(f"/api/v1/evidences/{evidence_id}", headers=out_headers)
+    assert resp.status_code == 403, resp.text
+
+
+async def test_delete_missing_evidence_returns_404(client: AsyncClient) -> None:
+    await signup(client, email="ev_del_nf@konkuk.ac.kr")
+    headers = await auth_headers(client, "ev_del_nf@konkuk.ac.kr")
+
+    resp = await client.delete(f"/api/v1/evidences/{uuid.uuid4()}", headers=headers)
+    assert resp.status_code == 404, resp.text
 
 
 async def test_upload_to_missing_settlement_returns_404(client: AsyncClient) -> None:

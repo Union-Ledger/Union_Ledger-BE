@@ -29,6 +29,11 @@ from union_ledger.services.evidence_extraction import (
     ExtractionConfigurationError,
     ExtractionError,
 )
+from union_ledger.services.evidence import (
+    EvidenceNotFound,
+    delete_evidence,
+    get_evidence_or_raise,
+)
 from union_ledger.services.file_storage import LocalFileStorage
 
 router = APIRouter(tags=["evidences", "ocr"])
@@ -283,11 +288,33 @@ async def update_evidence(
     return EvidenceResponse.model_validate(evidence)
 
 
+@router.delete(
+    "/evidences/{evidence_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="증빙 자료 삭제 (Treasurer/Admin)",
+)
+async def remove_evidence(
+    evidence_id: uuid.UUID,
+    session: DbSession,
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
+) -> None:
+    evidence = await _get_evidence_or_404(session, evidence_id)
+
+    await require_membership_for_org(
+        session,
+        user_id=current_user.id,
+        organization_id=evidence.organization_id,
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
+    )
+
+    await delete_evidence(session, evidence=evidence)
+
+
 async def _get_evidence_or_404(session: AsyncSession, evidence_id: uuid.UUID) -> Evidence:
-    evidence = await session.get(Evidence, evidence_id)
-    if evidence is None:
+    try:
+        return await get_evidence_or_raise(session, evidence_id)
+    except EvidenceNotFound as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="증빙 자료를 찾을 수 없습니다.",
-        )
-    return evidence
+            detail=str(exc),
+        ) from exc
