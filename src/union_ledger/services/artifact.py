@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import io
 import uuid
+import zipfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -115,6 +116,8 @@ class TemplateMissing(ArtifactError):
 class GenerationOutcome:
     excel: SettlementArtifact
     pdf: SettlementArtifact
+    excel_error: str | None = None
+    pdf_error: str | None = None
 
 
 # --- Spec-field aggregation ---------------------------------------------
@@ -231,6 +234,93 @@ def _is_valid_cell_address(addr: str) -> bool:
         return False
 
 
+# 'Strict Open XML(엄격)' uses different namespace URIs than the Transitional
+# format openpyxl supports — so openpyxl reads a strict .xlsx as having ZERO
+# sheets. Excel (esp. on Mac) can save in this format. We rewrite the strict
+# URIs back to transitional so the template (layout intact) becomes readable.
+_STRICT_NAMESPACE_REPLACEMENTS = (
+    (
+        "purl.oclc.org/ooxml/spreadsheetml/main",
+        "schemas.openxmlformats.org/spreadsheetml/2006/main",
+    ),
+    (
+        "purl.oclc.org/ooxml/officeDocument/relationships",
+        "schemas.openxmlformats.org/officeDocument/2006/relationships",
+    ),
+    (
+        "purl.oclc.org/ooxml/drawingml/main",
+        "schemas.openxmlformats.org/drawingml/2006/main",
+    ),
+    (
+        "purl.oclc.org/ooxml/officeDocument/extendedProperties",
+        "schemas.openxmlformats.org/officeDocument/2006/extended-properties",
+    ),
+    (
+        "purl.oclc.org/ooxml/officeDocument/customProperties",
+        "schemas.openxmlformats.org/officeDocument/2006/custom-properties",
+    ),
+    (
+        "purl.oclc.org/ooxml/officeDocument/docPropsVTypes",
+        "schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes",
+    ),
+)
+
+
+def _convert_strict_part(data: bytes) -> bytes:
+    text = data.decode("utf-8", "replace")
+    for strict_uri, transitional_uri in _STRICT_NAMESPACE_REPLACEMENTS:
+        text = text.replace(strict_uri, transitional_uri)
+    text = text.replace(' conformance="strict"', "")
+    return text.encode("utf-8")
+
+
+def _convert_strict_xlsx(template_path: Path) -> io.BytesIO:
+    """Rewrite a Strict-OOXML .xlsx into the Transitional format openpyxl reads."""
+    buf = io.BytesIO()
+    with (
+        zipfile.ZipFile(template_path) as zin,
+        zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout,
+    ):
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename.endswith((".xml", ".rels")):
+                data = _convert_strict_part(data)
+            zout.writestr(item, data)
+    buf.seek(0)
+    return buf
+
+
+def _load_template_workbook(template_path: Path):
+    """Load a template workbook, transparently handling Strict-OOXML files."""
+    try:
+        wb = load_workbook(template_path)
+    except (InvalidFileException, KeyError, OSError, zipfile.BadZipFile) as exc:
+        raise ArtifactError(f"템플릿 엑셀을 열 수 없습니다: {exc}") from exc
+
+    if wb.sheetnames:
+        return wb
+
+    # Zero sheets → almost certainly Strict OOXML. Convert and reload.
+    wb.close()
+    try:
+        converted = _convert_strict_xlsx(template_path)
+        wb = load_workbook(converted)
+    except (InvalidFileException, KeyError, OSError, zipfile.BadZipFile) as exc:
+        raise ArtifactError(
+            "템플릿에서 시트를 읽지 못했습니다. 'Strict Open XML(엄격)' 형식일 수 "
+            f"있는데 자동 변환에 실패했습니다 ({exc}). Excel에서 'Excel 통합 "
+            "문서(.xlsx)'로 다시 저장해 양식을 재업로드해 주세요."
+        ) from exc
+
+    if not wb.sheetnames:
+        wb.close()
+        raise ArtifactError(
+            "템플릿에서 시트를 읽지 못했습니다. Excel에서 'Excel 통합 문서(.xlsx)'로 "
+            "다시 저장해 양식을 재업로드해 주세요."
+        )
+    return wb
+
+
 def render_settlement_excel(
     *,
     template_path: Path,
@@ -238,15 +328,12 @@ def render_settlement_excel(
     spec_fields: dict[str, Any],
 ) -> bytes:
     """Open template, write each `mapping[cell] = spec_field` value, return bytes."""
-    try:
-        wb = load_workbook(template_path)
-    except (InvalidFileException, KeyError, OSError) as exc:
-        raise ArtifactError(f"템플릿 엑셀을 열 수 없습니다: {exc}") from exc
+    wb = _load_template_workbook(template_path)
 
     sheet = wb.active
     if sheet is None:
         wb.close()
-        raise ArtifactError("템플릿에 시트가 없습니다.")
+        raise ArtifactError("템플릿에 활성 시트가 없습니다.")
 
     for cell_addr, field_name in mapping_schema.items():
         if not isinstance(cell_addr, str) or not _is_valid_cell_address(cell_addr):
@@ -371,6 +458,9 @@ async def generate_settlement_artifacts(
     spec_fields = _compute_spec_fields(snapshot)
     out_dir = _artifact_dir(settings, settlement.id)
 
+    excel_error: str | None = None
+    pdf_error: str | None = None
+
     # Excel
     excel_row.status = ArtifactStatus.PROCESSING
     await session.commit()
@@ -389,8 +479,9 @@ async def generate_settlement_artifacts(
         excel_path = _write_bytes(out_dir, ".xlsx", excel_bytes)
         excel_row.file_path = str(excel_path)
         excel_row.status = ArtifactStatus.COMPLETED
-    except (ArtifactError, OSError):
+    except (ArtifactError, OSError) as exc:
         # We still attempt the PDF below — the two outputs are independent.
+        excel_error = str(exc)
         excel_row.status = ArtifactStatus.FAILED
         excel_row.file_path = None
     await session.commit()
@@ -406,14 +497,20 @@ async def generate_settlement_artifacts(
         pdf_path = _write_bytes(out_dir, ".pdf", pdf_bytes)
         pdf_row.file_path = str(pdf_path)
         pdf_row.status = ArtifactStatus.COMPLETED
-    except (ArtifactError, OSError):
+    except (ArtifactError, OSError) as exc:
+        pdf_error = str(exc)
         pdf_row.status = ArtifactStatus.FAILED
         pdf_row.file_path = None
     await session.commit()
 
     await session.refresh(excel_row)
     await session.refresh(pdf_row)
-    return GenerationOutcome(excel=excel_row, pdf=pdf_row)
+    return GenerationOutcome(
+        excel=excel_row,
+        pdf=pdf_row,
+        excel_error=excel_error,
+        pdf_error=pdf_error,
+    )
 
 
 async def list_settlement_artifacts(

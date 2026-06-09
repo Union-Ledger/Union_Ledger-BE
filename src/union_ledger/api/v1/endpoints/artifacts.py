@@ -91,6 +91,8 @@ async def generate_artifacts(
     return ArtifactGenerationResponse(
         excel=SettlementArtifactResponse.model_validate(outcome.excel),
         pdf=SettlementArtifactResponse.model_validate(outcome.pdf),
+        excel_error=outcome.excel_error,
+        pdf_error=outcome.pdf_error,
     )
 
 

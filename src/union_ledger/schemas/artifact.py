@@ -32,7 +32,14 @@ class SettlementArtifactResponse(BaseModel):
 
 
 class ArtifactGenerationResponse(BaseModel):
-    """Result of `POST .../artifacts:generate` — both artifacts in one shot."""
+    """Result of `POST .../artifacts:generate` — both artifacts in one shot.
+
+    `*_error` carry the failure reason when the matching artifact is FAILED,
+    so the FE can show *why* (e.g. a Strict-OOXML template) instead of a bare
+    '생성 실패'.
+    """
 
     excel: SettlementArtifactResponse
     pdf: SettlementArtifactResponse
+    excel_error: str | None = None
+    pdf_error: str | None = None
