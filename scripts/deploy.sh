@@ -80,6 +80,9 @@ cd '${REMOTE_DIR}'
 docker compose -f '${COMPOSE_FILE}' up -d --build
 docker compose -f '${COMPOSE_FILE}' exec -T api alembic upgrade head
 docker compose -f '${COMPOSE_FILE}' ps
+# Free disk after rebuild: drop untagged old layers and build cache.
+docker image prune -f
+docker builder prune -af
 # Remove legacy cloudflared container if it still exists
 docker rm -f union-ledger-cloudflared-1 2>/dev/null || true
 EOF
