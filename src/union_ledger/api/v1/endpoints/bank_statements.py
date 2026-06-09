@@ -4,6 +4,7 @@ Routes:
   POST   /settlements/{id}/bank-statements         — upload + parse xlsx
   GET    /settlements/{id}/bank-statements         — list uploads
   GET    /settlements/{id}/bank-transactions       — list parsed rows
+  DELETE /bank-statements/{upload_id}              — delete one upload + rows
 
 Org auth is resolved off the loaded settlement (item-level routes don't
 carry the org id), then checked inline against the caller's memberships.
@@ -29,9 +30,12 @@ from union_ledger.schemas.bank_statement import (
 )
 from union_ledger.services.bank_statement import (
     BankStatementParseError,
+    BankStatementUploadNotFound,
     EmptyBankStatementFile,
     UnsupportedBankStatementFormat,
     create_upload_with_transactions,
+    delete_bank_statement_upload,
+    get_upload_or_raise,
     list_settlement_transactions,
     list_settlement_uploads,
     parse_bank_statement_bytes,
@@ -158,3 +162,32 @@ async def list_transactions(
     )
     transactions = await list_settlement_transactions(session, settlement_id=settlement.id)
     return [BankTransactionResponse.model_validate(tx) for tx in transactions]
+
+
+@router.delete(
+    "/bank-statements/{upload_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="거래내역 업로드 삭제 (Treasurer/Admin)",
+)
+async def delete_upload(
+    upload_id: uuid.UUID,
+    session: DbSession,
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
+) -> None:
+    try:
+        upload = await get_upload_or_raise(session, upload_id)
+    except BankStatementUploadNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    settlement = await _load_settlement_or_404(session, upload.settlement_id)
+    await require_membership_for_org(
+        session,
+        user_id=current_user.id,
+        organization_id=settlement.organization_id,
+        allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
+    )
+
+    await delete_bank_statement_upload(session, upload=upload)

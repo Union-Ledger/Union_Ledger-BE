@@ -8,6 +8,7 @@ upload extension.
 from __future__ import annotations
 
 import io
+import uuid
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -276,6 +277,102 @@ async def test_upload_deposit_only_with_amount_suffixed_columns(
     assert txs.status_code == 200
     amounts = sorted(float(row["amount"]) for row in txs.json())
     assert amounts == [30000.0, 50000.0]  # deposits kept, positive
+
+
+# --- Delete upload --------------------------------------------------------
+
+
+async def _upload_simple_statement(
+    client: AsyncClient,
+    headers: dict[str, str],
+    *,
+    settlement_id: str,
+    description: str,
+    amount: int,
+) -> dict:
+    xlsx = _build_xlsx(
+        [
+            ["거래일자", "적요", "금액"],
+            [date(2026, 4, 1), description, amount],
+        ]
+    )
+    resp = await client.post(
+        f"/api/v1/settlements/{settlement_id}/bank-statements",
+        headers=headers,
+        files={"file": ("statement.xlsx", io.BytesIO(xlsx))},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+async def test_delete_upload_removes_only_that_files_transactions(
+    client: AsyncClient,
+) -> None:
+    await signup(client, email="bs_del@konkuk.ac.kr")
+    headers = await auth_headers(client, "bs_del@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+    settlement = await _create_settlement(client, headers, org_id=org["id"])
+    sid = settlement["id"]
+
+    first = await _upload_simple_statement(
+        client, headers, settlement_id=sid, description="첫번째", amount=-1000
+    )
+    await _upload_simple_statement(
+        client, headers, settlement_id=sid, description="두번째", amount=-2000
+    )
+
+    txs_before = await client.get(
+        f"/api/v1/settlements/{sid}/bank-transactions", headers=headers
+    )
+    assert len(txs_before.json()) == 2
+
+    del_resp = await client.delete(
+        f"/api/v1/bank-statements/{first['id']}",
+        headers=headers,
+    )
+    assert del_resp.status_code == 204, del_resp.text
+
+    uploads = await client.get(
+        f"/api/v1/settlements/{sid}/bank-statements", headers=headers
+    )
+    assert len(uploads.json()) == 1
+
+    txs_after = await client.get(
+        f"/api/v1/settlements/{sid}/bank-transactions", headers=headers
+    )
+    rows = txs_after.json()
+    assert len(rows) == 1
+    assert rows[0]["description"] == "두번째"
+
+
+async def test_delete_upload_requires_treasurer_or_admin(client: AsyncClient) -> None:
+    await signup(client, email="bs_del_owner@konkuk.ac.kr")
+    owner_headers = await auth_headers(client, "bs_del_owner@konkuk.ac.kr")
+    org = await create_org_as_admin(client, owner_headers)
+    settlement = await _create_settlement(client, owner_headers, org_id=org["id"])
+    upload = await _upload_simple_statement(
+        client, owner_headers, settlement_id=settlement["id"], description="x", amount=-1
+    )
+
+    await signup(client, email="bs_del_out@konkuk.ac.kr")
+    out_headers = await auth_headers(client, "bs_del_out@konkuk.ac.kr")
+
+    resp = await client.delete(
+        f"/api/v1/bank-statements/{upload['id']}",
+        headers=out_headers,
+    )
+    assert resp.status_code == 403, resp.text
+
+
+async def test_delete_upload_not_found(client: AsyncClient) -> None:
+    await signup(client, email="bs_del_nf@konkuk.ac.kr")
+    headers = await auth_headers(client, "bs_del_nf@konkuk.ac.kr")
+
+    resp = await client.delete(
+        f"/api/v1/bank-statements/{uuid.uuid4()}",
+        headers=headers,
+    )
+    assert resp.status_code == 404, resp.text
 
 
 # --- Unit tests: date coercion + legacy .xls routing ----------------------
