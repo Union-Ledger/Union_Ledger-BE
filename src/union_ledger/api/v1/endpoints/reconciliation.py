@@ -84,6 +84,7 @@ async def run_match(
         date_mismatch=summary.date_mismatch,
         missing_bank_transaction=summary.missing_bank_transaction,
         missing_evidence=summary.missing_evidence,
+        manually_resolved=summary.manually_resolved,
         results=result_rows,
     )
 

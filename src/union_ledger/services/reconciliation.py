@@ -64,6 +64,7 @@ class ReconciliationSummary:
     date_mismatch: int
     missing_bank_transaction: int
     missing_evidence: int
+    manually_resolved: int
     results: list[ReconciliationResult]
 
 
@@ -208,6 +209,12 @@ async def run_reconciliation(
         date_mismatch=len(date_mismatch),
         missing_bank_transaction=len(missing_bank),
         missing_evidence=len(missing_evidence),
+        # A fresh run only emits the auto statuses; manual resolutions are
+        # applied later via PATCH. Counted generically so the summary stays
+        # correct if this ever runs over pre-resolved rows.
+        manually_resolved=sum(
+            1 for row in all_results if row.status == MatchStatus.MANUALLY_RESOLVED
+        ),
         results=all_results,
     )
 

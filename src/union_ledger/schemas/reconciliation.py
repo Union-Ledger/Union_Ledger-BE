@@ -69,6 +69,7 @@ class ReconciliationRunResponse(BaseModel):
     date_mismatch: int
     missing_bank_transaction: int
     missing_evidence: int
+    manually_resolved: int
     results: list[ReconciliationResultResponse]
 
 
