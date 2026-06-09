@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     smtp_use_ssl: bool = False
     smtp_timeout_seconds: int = 15
     storage_root: Path = Path("storage")
+    # Max size for a single uploaded file (evidence/bank/template/회장신청).
+    # Guards against memory-exhaustion DoS since uploads are buffered in RAM.
+    max_upload_size_mb: int = 20
     ocr_engine: str = "paddleocr"
     ocr_mode: str = "local"  # "local" = CPU PaddleOCR, "modal" = Modal GPU Worker
     paddleocr_lang: str = "korean"

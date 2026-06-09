@@ -39,6 +39,8 @@ from pathlib import Path
 
 import xlrd
 from fastapi import UploadFile
+
+from union_ledger.services.file_storage import read_upload_within_limit
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 from sqlalchemy import delete, select
@@ -143,7 +145,9 @@ async def save_bank_statement_file(
 ) -> StoredBankStatement:
     original_name = _validate_bank_statement_filename(upload_file.filename or "bank_statement.xlsx")
     suffix = Path(original_name).suffix.lower()
-    file_bytes = await upload_file.read()
+    file_bytes = await read_upload_within_limit(
+        upload_file, settings.max_upload_size_mb * 1024 * 1024
+    )
     if not file_bytes:
         raise EmptyBankStatementFile("비어 있는 파일은 업로드할 수 없습니다.")
 

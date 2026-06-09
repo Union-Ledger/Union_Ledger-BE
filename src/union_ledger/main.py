@@ -1,9 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from union_ledger import __version__
 from union_ledger.api.router import api_router
 from union_ledger.core.config import get_settings
+from union_ledger.services.file_storage import FileTooLargeError
 
 
 def create_app() -> FastAPI:
@@ -26,6 +28,15 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router, prefix=settings.api_v1_prefix)
+
+    @app.exception_handler(FileTooLargeError)
+    async def _file_too_large_handler(
+        _request: Request, exc: FileTooLargeError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            content={"detail": str(exc)},
+        )
 
     @app.get("/", tags=["root"])
     async def read_root() -> dict[str, str]:

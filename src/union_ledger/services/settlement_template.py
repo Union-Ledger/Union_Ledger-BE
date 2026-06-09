@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import UploadFile
+
+from union_ledger.services.file_storage import read_upload_within_limit
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,7 +72,9 @@ async def save_template_file(
 ) -> StoredTemplate:
     original_name = _validate_template_filename(upload_file.filename or "template.xlsx")
     suffix = Path(original_name).suffix.lower()
-    file_bytes = await upload_file.read()
+    file_bytes = await read_upload_within_limit(
+        upload_file, settings.max_upload_size_mb * 1024 * 1024
+    )
     if not file_bytes:
         raise EmptyTemplateFile("비어 있는 파일은 업로드할 수 없습니다.")
 

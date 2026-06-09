@@ -37,7 +37,10 @@ from union_ledger.services.evidence_extraction import (
     ExtractionConfigurationError,
     ExtractionError,
 )
-from union_ledger.services.file_storage import LocalFileStorage
+from union_ledger.services.file_storage import (
+    LocalFileStorage,
+    read_upload_within_limit,
+)
 
 router = APIRouter(tags=["evidences", "ocr"])
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
@@ -70,7 +73,9 @@ async def preview_evidence_extraction(
 ) -> OCRPreviewResponse:
     del current_user
     filename = LocalFileStorage.validate_filename(file.filename or "upload.bin")
-    content = await file.read()
+    content = await read_upload_within_limit(
+        file, get_settings().max_upload_size_mb * 1024 * 1024
+    )
     if not content:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
