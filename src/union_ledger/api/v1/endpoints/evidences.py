@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 import uuid
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -202,6 +204,36 @@ async def get_evidence(
         organization_id=evidence.organization_id,
     )
     return EvidenceResponse.model_validate(evidence)
+
+
+@router.get(
+    "/evidences/{evidence_id}/file",
+    summary="증빙 원본 파일 (조직 멤버 — 감사 모달/검수 미리보기용)",
+    response_class=FileResponse,
+)
+async def get_evidence_file(
+    evidence_id: uuid.UUID,
+    session: DbSession,
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
+) -> FileResponse:
+    evidence = await _get_evidence_or_404(session, evidence_id)
+    await require_membership_for_org(
+        session,
+        user_id=current_user.id,
+        organization_id=evidence.organization_id,
+    )
+    path = Path(evidence.source_file_path) if evidence.source_file_path else None
+    if path is None or not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="증빙 원본 파일을 찾을 수 없습니다.",
+        )
+    media_type, _ = mimetypes.guess_type(path.name)
+    return FileResponse(
+        path=path,
+        media_type=media_type or "application/octet-stream",
+        filename=evidence.source_file_name or path.name,
+    )
 
 
 @router.post(

@@ -193,3 +193,39 @@ async def test_upload_to_missing_settlement_returns_404(client: AsyncClient) -> 
     missing_id = "00000000-0000-0000-0000-000000000000"
     resp = await _upload_evidence(client, headers, settlement_id=missing_id)
     assert resp.status_code == 404, resp.text
+
+
+async def test_member_can_download_evidence_file(client: AsyncClient) -> None:
+    await signup(client, email="evf_admin@konkuk.ac.kr")
+    admin_headers = await auth_headers(client, "evf_admin@konkuk.ac.kr")
+    org = await create_org_as_admin(client, admin_headers)
+    settlement = await _create_settlement(client, admin_headers, org_id=org["id"])
+    up = await _upload_evidence(
+        client, admin_headers, settlement_id=settlement["id"]
+    )
+    assert up.status_code == 201, up.text
+    evidence_id = up.json()["id"]
+
+    resp = await client.get(
+        f"/api/v1/evidences/{evidence_id}/file", headers=admin_headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.content == _PNG_BYTES
+
+
+async def test_non_member_cannot_download_evidence_file(client: AsyncClient) -> None:
+    await signup(client, email="evf_owner@konkuk.ac.kr")
+    owner_headers = await auth_headers(client, "evf_owner@konkuk.ac.kr")
+    org = await create_org_as_admin(client, owner_headers)
+    settlement = await _create_settlement(client, owner_headers, org_id=org["id"])
+    up = await _upload_evidence(
+        client, owner_headers, settlement_id=settlement["id"]
+    )
+    evidence_id = up.json()["id"]
+
+    await signup(client, email="evf_outsider@konkuk.ac.kr")
+    out_headers = await auth_headers(client, "evf_outsider@konkuk.ac.kr")
+    resp = await client.get(
+        f"/api/v1/evidences/{evidence_id}/file", headers=out_headers
+    )
+    assert resp.status_code == 403, resp.text
