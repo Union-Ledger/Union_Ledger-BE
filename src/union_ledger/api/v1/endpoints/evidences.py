@@ -25,6 +25,7 @@ from union_ledger.schemas.evidence import (
     OCRPreviewResponse,
 )
 from union_ledger.services.evidence_extraction import (
+    RECEIPT_CATEGORIES,
     EvidenceExtractionService,
     ExtractionConfigurationError,
     ExtractionError,
@@ -38,6 +39,18 @@ from union_ledger.services.file_storage import LocalFileStorage
 
 router = APIRouter(tags=["evidences", "ocr"])
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
+
+
+@router.get(
+    "/evidences/categories",
+    summary="List the fixed expense categories used for receipt auto-classification",
+)
+async def list_expense_categories(
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict[str, list[str]]:
+    """Single source of truth for the budget-category list (FE edit dropdown)."""
+    del current_user
+    return {"categories": list(RECEIPT_CATEGORIES)}
 
 
 @router.post(
@@ -241,6 +254,10 @@ async def extract_evidence(
     evidence.merchant_name = result.merchant_name
     evidence.amount = result.amount
     evidence.payment_method = result.payment_method
+    # Auto-fill the LLM-inferred category, but never overwrite a category the
+    # treasurer already set by hand (the FE may submit one on upload).
+    if result.budget_category and not evidence.budget_category:
+        evidence.budget_category = result.budget_category
     await session.commit()
     await session.refresh(evidence)
     return EvidenceResponse.model_validate(evidence)

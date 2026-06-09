@@ -263,6 +263,7 @@ class ParsedEvidenceFields:
     amount: Decimal | None
     payment_method: PaymentMethod | None
     confidence: float
+    budget_category: str | None = None
 
 
 @dataclass(slots=True)
@@ -302,6 +303,7 @@ class ExtractionResult:
     amount: Decimal | None
     payment_method: PaymentMethod | None
     payload: dict[str, Any]
+    budget_category: str | None = None
 
 
 @dataclass(slots=True)
@@ -581,12 +583,33 @@ def parse_clova_receipt_response(
 # (like CLOVA) we skip the local preprocessing + regex pipeline. Enabled via
 # Settings.ocr_provider == "gemini". Pure stdlib HTTP — no extra dependency.
 
+# Fixed student-council expense categories. We constrain the LLM to this list so
+# the per-category settlement rollup stays consistent (free-form would scatter:
+# 식비/음식/식대...). The FE edit dropdown should use the SAME list (served by
+# GET /evidences/categories). Stored as Evidence.budget_category (free-text col).
+RECEIPT_CATEGORIES: tuple[str, ...] = (
+    "식비",
+    "다과/간식",
+    "음료/카페",
+    "교통비",
+    "사무용품/비품",
+    "인쇄/홍보물",
+    "행사/행사물품",
+    "회의비",
+    "기념품/경품",
+    "장소대여",
+    "기타",
+)
+
 _GEMINI_RECEIPT_PROMPT = (
     "당신은 영수증 정보 추출기입니다. 첨부된 영수증 이미지에서 아래 항목을 추출해 "
     "JSON 객체로만 답하세요(설명/마크다운 금지):\n"
     '{"merchant_name": 상호명 문자열 또는 null, '
     '"date": 거래일자 "YYYY-MM-DD" 또는 null, '
-    '"total_amount": 최종 결제금액 숫자(통화기호·콤마 없이) 또는 null}\n'
+    '"total_amount": 최종 결제금액 숫자(통화기호·콤마 없이) 또는 null, '
+    '"category": 아래 목록 중 정확히 하나}\n'
+    "category는 반드시 다음 중에서만 고르세요: " + ", ".join(RECEIPT_CATEGORIES) + ". "
+    "적합한 게 없으면 \"기타\". "
     "부가세·소계가 아닌 최종 결제금액을 total_amount로 쓰세요."
 )
 
@@ -633,22 +656,32 @@ def _call_gemini_generate(
         ],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
     }
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        method="POST",
-        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")[:300] if exc.fp else ""
-        raise ExtractionError(f"Gemini 호출 실패 (HTTP {exc.code}): {detail}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise ExtractionError(f"Gemini 연결 실패: {exc}") from exc
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise ExtractionError(f"Gemini 응답 파싱 실패: {exc}") from exc
+    data = json.dumps(body).encode("utf-8")
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+    payload: dict[str, Any] | None = None
+    last_error: Exception | None = None
+    # 429 (rate limit) / 500 / 503 (overload) are transient — Gemini Flash 503s
+    # are common under load (and bulk upload is the main use case), so retry with
+    # backoff before giving up (and falling back to local OCR).
+    for attempt in range(3):
+        request = urllib.request.Request(url, data=data, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code in (429, 500, 503) and attempt < 2:
+                last_error = exc
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            detail = exc.read().decode("utf-8", "replace")[:300] if exc.fp else ""
+            raise ExtractionError(f"Gemini 호출 실패 (HTTP {exc.code}): {detail}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise ExtractionError(f"Gemini 연결 실패: {exc}") from exc
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise ExtractionError(f"Gemini 응답 파싱 실패: {exc}") from exc
+    if payload is None:
+        raise ExtractionError(f"Gemini 호출 실패 (재시도 소진): {last_error}") from last_error
 
     try:
         parts = payload["candidates"][0]["content"]["parts"]
@@ -708,6 +741,12 @@ def gemini_json_to_fields(data: dict[str, Any]) -> ParsedEvidenceFields:
             except InvalidOperation:
                 amount = None
 
+    raw_category = data.get("category")
+    budget_category = str(raw_category).strip() if raw_category not in (None, "") else None
+    if budget_category and budget_category not in RECEIPT_CATEGORIES:
+        # LLM returned something off-list → bucket as 기타 so the rollup stays clean.
+        budget_category = "기타"
+
     confidence = round(
         0.4 * (amount is not None)
         + 0.3 * (evidence_date is not None)
@@ -720,6 +759,7 @@ def gemini_json_to_fields(data: dict[str, Any]) -> ParsedEvidenceFields:
         amount=amount,
         payment_method=None,
         confidence=confidence,
+        budget_category=budget_category,
     )
 
 
@@ -847,6 +887,7 @@ class EvidenceExtractionService:
             amount=parsed.amount,
             payment_method=parsed.payment_method,
             payload=payload,
+            budget_category=parsed.budget_category,
         )
 
     def _extract_image_clova(
@@ -2303,6 +2344,7 @@ def _serialize_parsed_fields(fields: ParsedEvidenceFields) -> dict[str, Any]:
         "merchant_name": fields.merchant_name,
         "amount": str(fields.amount) if fields.amount is not None else None,
         "payment_method": fields.payment_method.value if fields.payment_method else None,
+        "budget_category": fields.budget_category,
         "confidence": round(fields.confidence, 4),
     }
 

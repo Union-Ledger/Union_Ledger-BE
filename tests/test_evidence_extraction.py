@@ -459,3 +459,26 @@ def test_gemini_provider_unconfigured_raises() -> None:
     svc = EvidenceExtractionService(Settings(ocr_provider="gemini", gemini_api_key=""))
     with pytest.raises(ExtractionConfigurationError):
         svc._extract_image_gemini(Path("nope.jpg"), EvidenceType.PHYSICAL_RECEIPT)
+
+
+def test_gemini_classifies_budget_category() -> None:
+    # In-list category kept; off-list bucketed to 기타; missing → None.
+    assert gemini_json_to_fields({"category": "음료/카페"}).budget_category == "음료/카페"
+    assert gemini_json_to_fields({"category": "커피값"}).budget_category == "기타"
+    assert gemini_json_to_fields({"merchant_name": "X"}).budget_category is None
+
+
+def test_expense_categories_endpoint_lists_fixed_set() -> None:
+    app.dependency_overrides[get_current_user] = lambda: AuthUser(
+        id=uuid.uuid4(),
+        email="treasurer@konkuk.ac.kr",
+        name="재정담당",
+        roles=[RoleType.TREASURER],
+    )
+    try:
+        resp = client.get("/api/v1/evidences/categories")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert resp.status_code == 200, resp.text
+    categories = resp.json()["categories"]
+    assert "식비" in categories and "기타" in categories
