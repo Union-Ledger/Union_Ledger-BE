@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import base64
+import json
 import os
 import re
 import tempfile
 import threading
+import time
 import unicodedata
+import urllib.error
+import urllib.request
+import uuid
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date
@@ -426,6 +432,150 @@ def merge_ocr_attempt_fields(
     )
 
 
+# --- CLOVA Receipt OCR (Naver Cloud) ---------------------------------------
+# Korean-specialized receipt OCR that returns structured fields directly, so we
+# skip the local preprocessing + regex pipeline entirely. Enabled via
+# Settings.ocr_provider == "clova". Pure stdlib HTTP — no extra dependency.
+
+
+def _clova_image_format(file_path: Path) -> str:
+    suffix = file_path.suffix.lower().lstrip(".")
+    return {"jpeg": "jpg", "tif": "tiff"}.get(suffix, suffix)
+
+
+def _call_clova_receipt_ocr(
+    *,
+    invoke_url: str,
+    secret_key: str,
+    image_bytes: bytes,
+    image_name: str,
+    image_format: str,
+    timeout: int,
+) -> dict[str, Any]:
+    body = {
+        "version": "V2",
+        "requestId": str(uuid.uuid4()),
+        "timestamp": int(time.time() * 1000),
+        "images": [
+            {
+                "format": image_format,
+                "name": image_name,
+                "data": base64.b64encode(image_bytes).decode("ascii"),
+            }
+        ],
+    }
+    request = urllib.request.Request(
+        invoke_url,
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "X-OCR-SECRET": secret_key},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:300] if exc.fp else ""
+        raise ExtractionError(f"CLOVA OCR 호출 실패 (HTTP {exc.code}): {detail}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise ExtractionError(f"CLOVA OCR 연결 실패: {exc}") from exc
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ExtractionError(f"CLOVA OCR 응답 파싱 실패: {exc}") from exc
+
+
+def _clova_field_text(field: object) -> str | None:
+    """Best string from a CLOVA field object ({text, formatted, ...})."""
+    if not isinstance(field, dict):
+        return None
+    formatted = field.get("formatted")
+    if isinstance(formatted, dict) and formatted.get("value") not in (None, ""):
+        return str(formatted["value"]).strip()
+    text = field.get("text")
+    return str(text).strip() if text not in (None, "") else None
+
+
+def _clova_date(field: object) -> date | None:
+    if not isinstance(field, dict):
+        return None
+    formatted = field.get("formatted")
+    if isinstance(formatted, dict):
+        try:
+            return date(
+                int(formatted["year"]), int(formatted["month"]), int(formatted["day"])
+            )
+        except (KeyError, TypeError, ValueError):
+            pass
+    text = field.get("text")
+    if text:
+        match = re.search(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})", str(text))
+        if match:
+            try:
+                return date(int(match[1]), int(match[2]), int(match[3]))
+            except ValueError:
+                return None
+    return None
+
+
+def _clova_amount(field: object) -> Decimal | None:
+    candidate = _clova_field_text(field)
+    if candidate is None:
+        return None
+    cleaned = re.sub(r"[^\d.\-]", "", candidate.replace(",", ""))
+    if not cleaned or cleaned in {"-", "."}:
+        return None
+    try:
+        return Decimal(cleaned)
+    except InvalidOperation:
+        return None
+
+
+def parse_clova_receipt_response(
+    payload: dict[str, Any],
+) -> tuple[ParsedEvidenceFields, str]:
+    """Map a CLOVA Receipt OCR response to ParsedEvidenceFields + raw-text summary."""
+    images = payload.get("images") or []
+    if not images:
+        raise ExtractionError("CLOVA OCR 응답에 이미지 결과가 없습니다.")
+    image = images[0]
+    infer = image.get("inferResult")
+    if infer and infer != "SUCCESS":
+        raise ExtractionError(f"CLOVA OCR 인식 실패: {image.get('message') or infer}")
+
+    result = (image.get("receipt") or {}).get("result") or {}
+    store = result.get("storeInfo") or {}
+    payment = result.get("paymentInfo") or {}
+    total = result.get("totalPrice") or {}
+
+    merchant_name = _clova_field_text(store.get("name"))
+    evidence_date = _clova_date(payment.get("date"))
+    amount = _clova_amount(total.get("price"))
+
+    scores = [
+        float(field["confidenceScore"])
+        for field in (store.get("name"), payment.get("date"), total.get("price"))
+        if isinstance(field, dict)
+        and isinstance(field.get("confidenceScore"), (int, float))
+    ]
+    confidence = round(sum(scores) / len(scores), 4) if scores else 0.0
+
+    raw_text = "\n".join(
+        part
+        for part in (
+            merchant_name,
+            evidence_date.isoformat() if evidence_date else None,
+            f"합계 {amount}" if amount is not None else None,
+        )
+        if part
+    )
+    parsed = ParsedEvidenceFields(
+        evidence_date=evidence_date,
+        merchant_name=merchant_name,
+        amount=amount,
+        payment_method=None,
+        confidence=confidence,
+    )
+    return parsed, raw_text
+
+
 class EvidenceExtractionService:
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
@@ -452,6 +602,13 @@ class EvidenceExtractionService:
             return self._extract_pdf_result(file_path, evidence_type)
         if suffix not in IMAGE_SUFFIXES:
             raise ExtractionError(f"지원하지 않는 파일 형식입니다: {suffix}")
+        if self._settings.ocr_provider == "clova":
+            try:
+                return self._extract_image_clova(file_path, evidence_type)
+            except (ExtractionError, ExtractionConfigurationError):
+                if not self._settings.clova_ocr_fallback_to_local:
+                    raise
+                # CLOVA unconfigured/unavailable → fall back to local PaddleOCR.
         return self._extract_image_result(file_path, evidence_type)
 
     def _extract_pdf_result(self, file_path: Path, evidence_type: EvidenceType) -> ExtractionResult:
@@ -487,6 +644,52 @@ class EvidenceExtractionService:
             evidence_type=evidence_type,
             method=ExtractionMethod.PDF_TEXT,
             raw_text=payload["raw_text"],
+            evidence_date=parsed.evidence_date,
+            merchant_name=parsed.merchant_name,
+            amount=parsed.amount,
+            payment_method=parsed.payment_method,
+            payload=payload,
+        )
+
+    def _extract_image_clova(
+        self,
+        file_path: Path,
+        evidence_type: EvidenceType,
+    ) -> ExtractionResult:
+        invoke_url = self._settings.clova_ocr_invoke_url
+        secret_key = self._settings.clova_ocr_secret_key
+        if not invoke_url or not secret_key:
+            raise ExtractionConfigurationError(
+                "CLOVA OCR가 설정되지 않았습니다 "
+                "(CLOVA_OCR_INVOKE_URL / CLOVA_OCR_SECRET_KEY)."
+            )
+        response = _call_clova_receipt_ocr(
+            invoke_url=invoke_url,
+            secret_key=secret_key,
+            image_bytes=file_path.read_bytes(),
+            image_name=file_path.name,
+            image_format=_clova_image_format(file_path),
+            timeout=self._settings.clova_ocr_timeout_seconds,
+        )
+        parsed, raw_text = parse_clova_receipt_response(response)
+        payload = {
+            "engine": "clova-receipt",
+            "raw_text": raw_text,
+            "confidence": parsed.confidence,
+            "review_required": True,
+            "normalized_fields": _serialize_parsed_fields(parsed),
+            "ocr_pipeline": {
+                "version": "v4",
+                "engine": "clova",
+                "stages": ["clova_receipt_ocr"],
+                "selected_variants": [],
+            },
+        }
+        return ExtractionResult(
+            source_file_name=file_path.name,
+            evidence_type=evidence_type,
+            method=ExtractionMethod.OCR,
+            raw_text=raw_text,
             evidence_date=parsed.evidence_date,
             merchant_name=parsed.merchant_name,
             amount=parsed.amount,

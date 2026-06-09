@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from union_ledger.api.deps.auth import get_current_user
@@ -20,11 +21,14 @@ from union_ledger.models.enums import (
 from union_ledger.schemas.auth_response import AuthUser
 from union_ledger.services.evidence_extraction import (
     EvidenceExtractionService,
+    ExtractionConfigurationError,
+    ExtractionError,
     ExtractionResult,
     OCRLine,
     PreparedImageVariant,
     build_ocr_attempt,
     merge_ocr_attempt_fields,
+    parse_clova_receipt_response,
     parse_extracted_text,
     select_best_ocr_attempt,
 )
@@ -347,3 +351,69 @@ def test_limit_variants_no_cap_returns_all() -> None:
     svc = EvidenceExtractionService(Settings(ocr_max_variants=0))
     variants = _make_variants(["original", "document_enhanced", "sharpened"])
     assert svc._limit_variants(variants) == variants
+
+
+# --- CLOVA Receipt OCR provider -------------------------------------------
+
+
+def _clova_sample(**overrides: object) -> dict:
+    result = {
+        "storeInfo": {
+            "name": {
+                "text": "스타벅스 강남점",
+                "formatted": {"value": "스타벅스 강남점"},
+                "confidenceScore": 0.99,
+            }
+        },
+        "paymentInfo": {
+            "date": {
+                "text": "2026-06-09",
+                "formatted": {"year": "2026", "month": "06", "day": "09"},
+                "confidenceScore": 0.98,
+            }
+        },
+        "totalPrice": {
+            "price": {
+                "text": "9,500",
+                "formatted": {"value": "9500"},
+                "confidenceScore": 0.97,
+            }
+        },
+    }
+    result.update(overrides)
+    return {"images": [{"inferResult": "SUCCESS", "receipt": {"result": result}}]}
+
+
+def test_parse_clova_receipt_response_maps_fields() -> None:
+    parsed, raw_text = parse_clova_receipt_response(_clova_sample())
+    assert parsed.merchant_name == "스타벅스 강남점"
+    assert parsed.evidence_date == date(2026, 6, 9)
+    assert parsed.amount == Decimal("9500")
+    assert parsed.confidence == pytest.approx(0.98, abs=0.01)
+    assert "9500" in raw_text
+
+
+def test_parse_clova_receipt_response_tolerates_missing_fields() -> None:
+    # Only a store name present; date/amount absent → None, no crash.
+    payload = {"images": [{"inferResult": "SUCCESS", "receipt": {"result": {
+        "storeInfo": {"name": {"text": "분식집"}},
+    }}}]}
+    parsed, _ = parse_clova_receipt_response(payload)
+    assert parsed.merchant_name == "분식집"
+    assert parsed.evidence_date is None
+    assert parsed.amount is None
+
+
+def test_parse_clova_receipt_response_failure_raises() -> None:
+    payload = {"images": [{"inferResult": "FAILURE", "message": "low quality"}]}
+    with pytest.raises(ExtractionError):
+        parse_clova_receipt_response(payload)
+
+
+def test_clova_provider_unconfigured_raises() -> None:
+    # ocr_provider=clova but no URL/secret → config error (caller falls back).
+    svc = EvidenceExtractionService(
+        Settings(ocr_provider="clova", clova_ocr_invoke_url="", clova_ocr_secret_key="")
+    )
+    with pytest.raises(ExtractionConfigurationError):
+        svc._extract_image_clova(Path("nope.jpg"), EvidenceType.PHYSICAL_RECEIPT)

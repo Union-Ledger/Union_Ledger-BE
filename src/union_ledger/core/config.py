@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     # mkldnn = oneDNN CPU acceleration (safe speedup on most x86 CPUs).
     ocr_max_variants: int = 3
     ocr_enable_mkldnn: bool = True
+    # Receipt extraction provider: "local" = PaddleOCR (default, free, offline),
+    # "clova" = Naver CLOVA Receipt OCR (Korean-specialized, returns structured
+    # fields). When "clova" is set, configure the invoke URL + secret from the
+    # NCP console; on any CLOVA error we fall back to local OCR unless disabled.
+    ocr_provider: str = "local"
+    clova_ocr_invoke_url: str = ""
+    clova_ocr_secret_key: str = ""
+    clova_ocr_timeout_seconds: int = 30
+    clova_ocr_fallback_to_local: bool = True
     allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://localhost:5173"]
     )
