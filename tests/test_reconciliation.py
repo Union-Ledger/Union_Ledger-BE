@@ -133,6 +133,9 @@ async def test_auto_match_exact(
     assert body["missing_bank_transaction"] == 0
     assert body["missing_evidence"] == 0
     assert body["total"] == 1
+    matched = body["results"][0]
+    assert matched["evidence_merchant_name"] == "회식집"
+    assert matched["bank_merchant_name"] == "회식"
 
 
 async def test_auto_match_classifies_partials_and_missing(
