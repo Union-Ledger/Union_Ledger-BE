@@ -576,6 +576,153 @@ def parse_clova_receipt_response(
     return parsed, raw_text
 
 
+# --- Gemini vision LLM (Google AI) -----------------------------------------
+# A vision LLM reads the receipt image and returns structured JSON directly, so
+# (like CLOVA) we skip the local preprocessing + regex pipeline. Enabled via
+# Settings.ocr_provider == "gemini". Pure stdlib HTTP — no extra dependency.
+
+_GEMINI_RECEIPT_PROMPT = (
+    "당신은 영수증 정보 추출기입니다. 첨부된 영수증 이미지에서 아래 항목을 추출해 "
+    "JSON 객체로만 답하세요(설명/마크다운 금지):\n"
+    '{"merchant_name": 상호명 문자열 또는 null, '
+    '"date": 거래일자 "YYYY-MM-DD" 또는 null, '
+    '"total_amount": 최종 결제금액 숫자(통화기호·콤마 없이) 또는 null}\n'
+    "부가세·소계가 아닌 최종 결제금액을 total_amount로 쓰세요."
+)
+
+_GEMINI_MIME_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+}
+
+
+def _gemini_mime_type(file_path: Path) -> str:
+    return _GEMINI_MIME_TYPES.get(file_path.suffix.lower(), "image/jpeg")
+
+
+def _call_gemini_generate(
+    *,
+    api_key: str,
+    model: str,
+    image_bytes: bytes,
+    mime_type: str,
+    prompt: str,
+    timeout: int,
+) -> str:
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent"
+    )
+    body = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inlineData": {
+                            "mimeType": mime_type,
+                            "data": base64.b64encode(image_bytes).decode("ascii"),
+                        }
+                    },
+                ]
+            }
+        ],
+        "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
+    }
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:300] if exc.fp else ""
+        raise ExtractionError(f"Gemini 호출 실패 (HTTP {exc.code}): {detail}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise ExtractionError(f"Gemini 연결 실패: {exc}") from exc
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ExtractionError(f"Gemini 응답 파싱 실패: {exc}") from exc
+
+    try:
+        parts = payload["candidates"][0]["content"]["parts"]
+        text = "".join(part.get("text", "") for part in parts)
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ExtractionError(
+            f"Gemini 응답에 결과가 없습니다: {str(payload)[:200]}"
+        ) from exc
+    if not text.strip():
+        raise ExtractionError("Gemini가 빈 응답을 반환했습니다.")
+    return text
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    """Parse a JSON object from an LLM response, tolerating ```json fences."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+    try:
+        data = json.loads(cleaned)
+    except (ValueError, json.JSONDecodeError):
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if not match:
+            raise ExtractionError("Gemini 응답에서 JSON을 찾지 못했습니다.") from None
+        try:
+            data = json.loads(match.group(0))
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise ExtractionError(f"Gemini JSON 파싱 실패: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ExtractionError("Gemini JSON이 객체가 아닙니다.")
+    return data
+
+
+def gemini_json_to_fields(data: dict[str, Any]) -> ParsedEvidenceFields:
+    """Map the LLM's {merchant_name, date, total_amount} JSON to ParsedEvidenceFields."""
+    merchant = data.get("merchant_name")
+    merchant_name = str(merchant).strip() if merchant not in (None, "") else None
+
+    evidence_date: date | None = None
+    raw_date = data.get("date")
+    if raw_date:
+        match = re.search(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})", str(raw_date))
+        if match:
+            try:
+                evidence_date = date(int(match[1]), int(match[2]), int(match[3]))
+            except ValueError:
+                evidence_date = None
+
+    amount: Decimal | None = None
+    raw_amount = data.get("total_amount")
+    if raw_amount not in (None, ""):
+        cleaned = re.sub(r"[^\d.\-]", "", str(raw_amount).replace(",", ""))
+        if cleaned and cleaned not in {"-", "."}:
+            try:
+                amount = Decimal(cleaned)
+            except InvalidOperation:
+                amount = None
+
+    confidence = round(
+        0.4 * (amount is not None)
+        + 0.3 * (evidence_date is not None)
+        + 0.3 * (merchant_name is not None),
+        4,
+    )
+    return ParsedEvidenceFields(
+        evidence_date=evidence_date,
+        merchant_name=merchant_name,
+        amount=amount,
+        payment_method=None,
+        confidence=confidence,
+    )
+
+
 class EvidenceExtractionService:
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
@@ -602,7 +749,14 @@ class EvidenceExtractionService:
             return self._extract_pdf_result(file_path, evidence_type)
         if suffix not in IMAGE_SUFFIXES:
             raise ExtractionError(f"지원하지 않는 파일 형식입니다: {suffix}")
-        if self._settings.ocr_provider == "clova":
+        if self._settings.ocr_provider == "gemini":
+            try:
+                return self._extract_image_gemini(file_path, evidence_type)
+            except (ExtractionError, ExtractionConfigurationError):
+                if not self._settings.gemini_fallback_to_local:
+                    raise
+                # Gemini unconfigured/unavailable → fall back to local PaddleOCR.
+        elif self._settings.ocr_provider == "clova":
             try:
                 return self._extract_image_clova(file_path, evidence_type)
             except (ExtractionError, ExtractionConfigurationError):
@@ -644,6 +798,50 @@ class EvidenceExtractionService:
             evidence_type=evidence_type,
             method=ExtractionMethod.PDF_TEXT,
             raw_text=payload["raw_text"],
+            evidence_date=parsed.evidence_date,
+            merchant_name=parsed.merchant_name,
+            amount=parsed.amount,
+            payment_method=parsed.payment_method,
+            payload=payload,
+        )
+
+    def _extract_image_gemini(
+        self,
+        file_path: Path,
+        evidence_type: EvidenceType,
+    ) -> ExtractionResult:
+        api_key = self._settings.gemini_api_key
+        if not api_key:
+            raise ExtractionConfigurationError(
+                "Gemini API 키가 설정되지 않았습니다 (GEMINI_API_KEY)."
+            )
+        text = _call_gemini_generate(
+            api_key=api_key,
+            model=self._settings.gemini_model,
+            image_bytes=file_path.read_bytes(),
+            mime_type=_gemini_mime_type(file_path),
+            prompt=_GEMINI_RECEIPT_PROMPT,
+            timeout=self._settings.gemini_timeout_seconds,
+        )
+        parsed = gemini_json_to_fields(_extract_json_object(text))
+        payload = {
+            "engine": f"gemini:{self._settings.gemini_model}",
+            "raw_text": text.strip(),
+            "confidence": parsed.confidence,
+            "review_required": True,
+            "normalized_fields": _serialize_parsed_fields(parsed),
+            "ocr_pipeline": {
+                "version": "v4",
+                "engine": "gemini",
+                "stages": ["gemini_vision"],
+                "selected_variants": [],
+            },
+        }
+        return ExtractionResult(
+            source_file_name=file_path.name,
+            evidence_type=evidence_type,
+            method=ExtractionMethod.OCR,
+            raw_text=text.strip(),
             evidence_date=parsed.evidence_date,
             merchant_name=parsed.merchant_name,
             amount=parsed.amount,

@@ -26,7 +26,9 @@ from union_ledger.services.evidence_extraction import (
     ExtractionResult,
     OCRLine,
     PreparedImageVariant,
+    _extract_json_object,
     build_ocr_attempt,
+    gemini_json_to_fields,
     merge_ocr_attempt_fields,
     parse_clova_receipt_response,
     parse_extracted_text,
@@ -417,3 +419,43 @@ def test_clova_provider_unconfigured_raises() -> None:
     )
     with pytest.raises(ExtractionConfigurationError):
         svc._extract_image_clova(Path("nope.jpg"), EvidenceType.PHYSICAL_RECEIPT)
+
+
+# --- Gemini vision LLM provider -------------------------------------------
+
+
+def test_gemini_extract_json_object_strips_fences() -> None:
+    fenced = '```json\n{"merchant_name": "스타벅스", "total_amount": 9500}\n```'
+    assert _extract_json_object(fenced) == {
+        "merchant_name": "스타벅스",
+        "total_amount": 9500,
+    }
+    # also tolerates surrounding prose
+    messy = 'Here is the result: {"merchant_name": "분식집"} thanks'
+    assert _extract_json_object(messy)["merchant_name"] == "분식집"
+
+
+def test_gemini_json_to_fields_maps_and_normalizes() -> None:
+    fields = gemini_json_to_fields(
+        {"merchant_name": "스타벅스 강남점", "date": "2026.06.09", "total_amount": "9,500"}
+    )
+    assert fields.merchant_name == "스타벅스 강남점"
+    assert fields.evidence_date == date(2026, 6, 9)
+    assert fields.amount == Decimal("9500")
+    assert fields.confidence == pytest.approx(1.0)
+
+
+def test_gemini_json_to_fields_tolerates_nulls() -> None:
+    fields = gemini_json_to_fields(
+        {"merchant_name": None, "date": None, "total_amount": None}
+    )
+    assert fields.merchant_name is None
+    assert fields.evidence_date is None
+    assert fields.amount is None
+    assert fields.confidence == 0.0
+
+
+def test_gemini_provider_unconfigured_raises() -> None:
+    svc = EvidenceExtractionService(Settings(ocr_provider="gemini", gemini_api_key=""))
+    with pytest.raises(ExtractionConfigurationError):
+        svc._extract_image_gemini(Path("nope.jpg"), EvidenceType.PHYSICAL_RECEIPT)

@@ -45,14 +45,20 @@ class Settings(BaseSettings):
     ocr_max_variants: int = 3
     ocr_enable_mkldnn: bool = True
     # Receipt extraction provider: "local" = PaddleOCR (default, free, offline),
-    # "clova" = Naver CLOVA Receipt OCR (Korean-specialized, returns structured
-    # fields). When "clova" is set, configure the invoke URL + secret from the
-    # NCP console; on any CLOVA error we fall back to local OCR unless disabled.
+    # "clova" = Naver CLOVA Receipt OCR, "gemini" = Google Gemini vision LLM.
+    # For "clova"/"gemini", configure the keys below; on any provider error we
+    # fall back to local OCR unless the matching *_fallback_to_local is false.
     ocr_provider: str = "local"
     clova_ocr_invoke_url: str = ""
     clova_ocr_secret_key: str = ""
     clova_ocr_timeout_seconds: int = 30
     clova_ocr_fallback_to_local: bool = True
+    # Gemini (Google AI). Use the PAID tier — the free tier rejects image input
+    # and is used for training; paid is not (matters for 공금/financial data).
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.5-flash"
+    gemini_timeout_seconds: int = 30
+    gemini_fallback_to_local: bool = True
     allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://localhost:5173"]
     )
