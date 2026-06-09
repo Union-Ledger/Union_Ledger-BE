@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import threading
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
@@ -15,6 +16,91 @@ from typing import Any
 from union_ledger.core.config import Settings, get_settings
 from union_ledger.models.enums import EvidenceType, ExtractionMethod, PaymentMethod
 from union_ledger.services.file_storage import SUPPORTED_EVIDENCE_SUFFIXES
+
+# --- PaddleOCR engine cache (process-global) --------------------------------
+# Constructing PaddleOCR() reloads models into memory (seconds). The FastAPI
+# endpoint builds a new EvidenceExtractionService per request, so without a
+# cache every upload paid that cost. Reuse one engine per (lang, mkldnn) for
+# the whole process. Inference is serialized with a lock: Paddle predictors are
+# not guaranteed thread-safe and OCR runs inside asyncio.to_thread workers.
+_ENGINE_LOCK = threading.Lock()
+_PREDICT_LOCK = threading.Lock()
+_ENGINE_CACHE: dict[tuple[Any, ...], Any] = {}
+
+# Priority used when capping OCR passes (Settings.ocr_max_variants). Each
+# preprocessing variant is a full OCR pass, so on CPU 6 variants ≈ 6× latency.
+# Best general-purpose preprocessing first, so a cap of 1 keeps the most
+# reliable single variant.
+_VARIANT_PRIORITY = (
+    "document_enhanced",
+    "background_cropped",
+    "original",
+    "adaptive_binary",
+    "sharpened",
+    "perspective_corrected",
+)
+
+
+def _build_paddle_ocr_engine(settings: Settings) -> Any:
+    """Construct a PaddleOCR engine, trying kwarg sets newest-API-first."""
+    try:
+        from paddleocr import PaddleOCR
+    except ImportError as exc:
+        raise ExtractionConfigurationError(
+            "PaddleOCR 의존성이 설치되지 않았습니다. `paddleocr`를 설치해 주세요."
+        ) from exc
+
+    os.environ.setdefault("DISABLE_MODEL_SOURCE_CHECK", "True")
+    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    mkldnn = bool(settings.ocr_enable_mkldnn)
+    candidate_kwargs = [
+        {
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+            "enable_mkldnn": mkldnn,
+            "text_detection_model_name": "PP-OCRv5_mobile_det",
+            "text_recognition_model_name": "korean_PP-OCRv5_mobile_rec",
+        },
+        {
+            "lang": settings.paddleocr_lang,
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+            "enable_mkldnn": mkldnn,
+        },
+        {
+            "lang": settings.paddleocr_lang,
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+        },
+        {"lang": settings.paddleocr_lang},
+        {},
+    ]
+    last_error: Exception | None = None
+    for engine_kwargs in candidate_kwargs:
+        try:
+            return PaddleOCR(**engine_kwargs)
+        except (TypeError, ValueError) as exc:
+            last_error = exc
+    raise ExtractionConfigurationError(
+        f"PaddleOCR 초기화에 실패했습니다: {last_error}"
+    ) from last_error
+
+
+def _get_cached_paddle_ocr_engine(settings: Settings) -> Any:
+    key = (settings.paddleocr_lang, bool(settings.ocr_enable_mkldnn))
+    engine = _ENGINE_CACHE.get(key)
+    if engine is not None:
+        return engine
+    with _ENGINE_LOCK:
+        engine = _ENGINE_CACHE.get(key)
+        if engine is None:
+            engine = _build_paddle_ocr_engine(settings)
+            _ENGINE_CACHE[key] = engine
+        return engine
+
 
 IMAGE_SUFFIXES = SUPPORTED_EVIDENCE_SUFFIXES - {".pdf"}
 PIPELINE_STAGES = (
@@ -451,6 +537,19 @@ class EvidenceExtractionService:
             payload=payload,
         )
 
+    def _limit_variants(
+        self, variants: list[PreparedImageVariant]
+    ) -> list[PreparedImageVariant]:
+        """Cap OCR passes for speed (Settings.ocr_max_variants; 0 = no cap)."""
+        cap = self._settings.ocr_max_variants
+        if cap <= 0 or len(variants) <= cap:
+            return variants
+        rank = {label: i for i, label in enumerate(_VARIANT_PRIORITY)}
+        ordered = sorted(
+            variants, key=lambda v: rank.get(v.label, len(_VARIANT_PRIORITY))
+        )
+        return ordered[:cap]
+
     def _collect_image_ocr_attempts(
         self,
         variants: list[PreparedImageVariant],
@@ -460,7 +559,7 @@ class EvidenceExtractionService:
             return self._collect_modal_ocr_attempts_parallel(variants, evidence_type)
 
         attempts: list[OCRAttempt] = []
-        for variant in variants:
+        for variant in self._limit_variants(variants):
             raw_text, average_confidence, line_count, lines = self._run_paddle_ocr(variant.path)
             attempt = build_ocr_attempt(
                 raw_text,
@@ -611,54 +710,9 @@ class EvidenceExtractionService:
         return cv2, np, threshold_sauvola
 
     def _get_paddle_ocr_engine(self) -> Any:
-        if self._paddle_ocr_engine is not None:
-            return self._paddle_ocr_engine
-
-        try:
-            from paddleocr import PaddleOCR
-        except ImportError as exc:
-            raise ExtractionConfigurationError(
-                "PaddleOCR 의존성이 설치되지 않았습니다. `paddleocr`를 설치해 주세요."
-            ) from exc
-
-        os.environ.setdefault("DISABLE_MODEL_SOURCE_CHECK", "True")
-        os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-        candidate_kwargs = [
-            {
-                "use_doc_orientation_classify": False,
-                "use_doc_unwarping": False,
-                "use_textline_orientation": False,
-                "enable_mkldnn": False,
-                "text_detection_model_name": "PP-OCRv5_mobile_det",
-                "text_recognition_model_name": "korean_PP-OCRv5_mobile_rec",
-            },
-            {
-                "lang": self._settings.paddleocr_lang,
-                "use_doc_orientation_classify": False,
-                "use_doc_unwarping": False,
-                "use_textline_orientation": False,
-                "enable_mkldnn": False,
-            },
-            {
-                "lang": self._settings.paddleocr_lang,
-                "use_doc_orientation_classify": False,
-                "use_doc_unwarping": False,
-                "use_textline_orientation": False,
-            },
-            {"lang": self._settings.paddleocr_lang},
-            {},
-        ]
-        last_error: Exception | None = None
-        for engine_kwargs in candidate_kwargs:
-            try:
-                self._paddle_ocr_engine = PaddleOCR(**engine_kwargs)
-                break
-            except (TypeError, ValueError) as exc:
-                last_error = exc
+        # Reuse the process-global engine so models load once, not per request.
         if self._paddle_ocr_engine is None:
-            raise ExtractionConfigurationError(
-                f"PaddleOCR 초기화에 실패했습니다: {last_error}"
-            ) from last_error
+            self._paddle_ocr_engine = _get_cached_paddle_ocr_engine(self._settings)
         return self._paddle_ocr_engine
 
     def _run_paddle_ocr(self, file_path: Path) -> tuple[str, float, int, list[OCRLine]]:
@@ -712,10 +766,13 @@ class EvidenceExtractionService:
     def _run_local_paddle_ocr(self, file_path: Path) -> tuple[str, float, int, list[OCRLine]]:
         engine = self._get_paddle_ocr_engine()
         try:
-            if hasattr(engine, "predict"):
-                raw_result = list(engine.predict(str(file_path)))
-            else:
-                raw_result = engine.ocr(str(file_path))
+            # Serialize inference: the engine is shared across to_thread workers
+            # and Paddle predictors are not guaranteed thread-safe.
+            with _PREDICT_LOCK:
+                if hasattr(engine, "predict"):
+                    raw_result = list(engine.predict(str(file_path)))
+                else:
+                    raw_result = engine.ocr(str(file_path))
         except Exception as exc:
             raise ExtractionError(f"PaddleOCR 실행에 실패했습니다: {exc}") from exc
 

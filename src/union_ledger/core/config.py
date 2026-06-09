@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     ocr_mode: str = "local"  # "local" = CPU PaddleOCR, "modal" = Modal GPU Worker
     paddleocr_lang: str = "korean"
     ocr_min_line_confidence: float = 0.25
+    # Local CPU OCR speed knobs. Each preprocessing variant is a full OCR pass,
+    # so the original 6 variants made CPU OCR ~6× slower. Cap the passes:
+    #   0 = no cap (max accuracy, slowest), 3 = balanced default (3-way voting),
+    #   1 = fastest (single best variant). Set via OCR_MAX_VARIANTS.
+    # mkldnn = oneDNN CPU acceleration (safe speedup on most x86 CPUs).
+    ocr_max_variants: int = 3
+    ocr_enable_mkldnn: bool = True
     allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://localhost:5173"]
     )

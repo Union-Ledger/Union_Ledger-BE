@@ -3,10 +3,12 @@ from __future__ import annotations
 import uuid
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from union_ledger.api.deps.auth import get_current_user
+from union_ledger.core.config import Settings
 from union_ledger.main import app
 from union_ledger.models.enums import (
     EvidenceStatus,
@@ -20,6 +22,7 @@ from union_ledger.services.evidence_extraction import (
     EvidenceExtractionService,
     ExtractionResult,
     OCRLine,
+    PreparedImageVariant,
     build_ocr_attempt,
     merge_ocr_attempt_fields,
     parse_extracted_text,
@@ -316,3 +319,31 @@ def test_ocr_preview_endpoint_returns_structured_result(monkeypatch) -> None:
     assert payload["status"] == EvidenceStatus.NEEDS_REVIEW.value
     assert payload["merchant_name"] == "건국대 학생회관 1847카페"
     assert payload["amount"] == "5500"
+
+
+def _make_variants(labels: list[str]) -> list[PreparedImageVariant]:
+    return [PreparedImageVariant(label=label, path=Path(f"{label}.png")) for label in labels]
+
+
+def test_limit_variants_caps_by_priority() -> None:
+    # OCR latency scales with the number of variants (one OCR pass each), so a
+    # cap keeps only the highest-priority preprocessing for fast CPU runs.
+    svc = EvidenceExtractionService(Settings(ocr_max_variants=2))
+    variants = _make_variants(
+        [
+            "original",
+            "perspective_corrected",
+            "background_cropped",
+            "document_enhanced",
+            "adaptive_binary",
+            "sharpened",
+        ]
+    )
+    limited = svc._limit_variants(variants)
+    assert [v.label for v in limited] == ["document_enhanced", "background_cropped"]
+
+
+def test_limit_variants_no_cap_returns_all() -> None:
+    svc = EvidenceExtractionService(Settings(ocr_max_variants=0))
+    variants = _make_variants(["original", "document_enhanced", "sharpened"])
+    assert svc._limit_variants(variants) == variants
