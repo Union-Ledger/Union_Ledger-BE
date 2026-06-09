@@ -22,6 +22,8 @@ from union_ledger.schemas.auth_request import (
 )
 from union_ledger.schemas.auth_response import (
     AuthUser,
+    MeResponse,
+    OrganizationSummary,
     ResetPasswordResponse,
     SendVerificationCodeResponse,
     TokenResponse,
@@ -309,6 +311,41 @@ async def sign_up(
     return TokenResponse(access_token=token)
 
 
-@router.get("/me", response_model=AuthUser, summary="Get current authenticated user")
-async def read_current_user(current_user: AuthUser = Depends(get_current_user)) -> AuthUser:
-    return current_user
+@router.get("/me", response_model=MeResponse, summary="Get current authenticated user")
+async def read_current_user(
+    current_user: AuthUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> MeResponse:
+    rows = (
+        await session.execute(
+            select(OrganizationMembership, Organization)
+            .join(
+                Organization,
+                OrganizationMembership.organization_id == Organization.id,
+            )
+            .where(OrganizationMembership.user_id == current_user.id)
+            .order_by(Organization.created_at.asc())
+        )
+    ).all()
+    organizations = [
+        OrganizationSummary(
+            id=org.id,
+            name=org.name,
+            college_name=org.college_name,
+            department_name=org.department_name,
+            role=membership.role,
+            is_primary=membership.is_primary,
+        )
+        for membership, org in rows
+    ]
+    primary = next((org for org in organizations if org.is_primary), None)
+    organization_id = (
+        primary.id
+        if primary is not None
+        else (organizations[0].id if organizations else None)
+    )
+    return MeResponse(
+        **current_user.model_dump(),
+        organization_id=organization_id,
+        organizations=organizations,
+    )

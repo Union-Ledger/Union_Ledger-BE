@@ -341,3 +341,30 @@ async def test_me_is_operator_false_for_regular_user(client: AsyncClient) -> Non
     me = await client.get("/api/v1/auth/me", headers=headers)
     assert me.status_code == 200
     assert me.json()["is_operator"] is False
+
+
+async def test_me_includes_primary_organization(client: AsyncClient) -> None:
+    await signup(client, email="me_org@konkuk.ac.kr")
+    headers = await auth_headers(client, "me_org@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+
+    me = await client.get("/api/v1/auth/me", headers=headers)
+    assert me.status_code == 200, me.text
+    body = me.json()
+    assert body["organization_id"] == org["id"]
+    assert len(body["organizations"]) == 1
+    assert body["organizations"][0]["id"] == org["id"]
+    assert body["organizations"][0]["role"] == "president"
+    assert body["organizations"][0]["is_primary"] is True
+
+
+async def test_me_organization_id_null_without_membership(
+    client: AsyncClient,
+) -> None:
+    await signup(client, email="me_noorg@konkuk.ac.kr")
+    headers = await auth_headers(client, "me_noorg@konkuk.ac.kr")
+    me = await client.get("/api/v1/auth/me", headers=headers)
+    assert me.status_code == 200, me.text
+    body = me.json()
+    assert body["organization_id"] is None
+    assert body["organizations"] == []

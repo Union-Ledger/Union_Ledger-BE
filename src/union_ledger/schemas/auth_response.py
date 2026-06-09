@@ -22,6 +22,25 @@ class AuthUser(BaseModel):
     is_operator: bool = False
 
 
+class OrganizationSummary(BaseModel):
+    id: uuid.UUID
+    name: str
+    college_name: str | None = None
+    department_name: str | None = None
+    role: RoleType
+    is_primary: bool
+
+
+class MeResponse(AuthUser):
+    """`/auth/me` payload — AuthUser plus the caller's organization context so
+    the FE can resolve the active organization directly instead of guessing or
+    falling back to localStorage. `organization_id` is the primary membership
+    (is_primary, else the first); None for a plain student with no membership."""
+
+    organization_id: uuid.UUID | None = None
+    organizations: list[OrganizationSummary] = []
+
+
 class SendVerificationCodeResponse(BaseModel):
     message: str
     expires_in_seconds: int
