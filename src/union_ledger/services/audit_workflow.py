@@ -153,6 +153,45 @@ async def require_auditor_for_settlement(
     return membership
 
 
+async def resolve_settlement_comment_membership(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    settlement: Settlement,
+) -> OrganizationMembership:
+    """Return membership for comment authorship: org member or college auditor."""
+    membership = await session.scalar(
+        select(OrganizationMembership).where(
+            OrganizationMembership.organization_id == settlement.organization_id,
+            OrganizationMembership.user_id == user_id,
+        )
+    )
+    if membership is not None:
+        return membership
+    return await require_auditor_for_settlement(
+        session,
+        user_id=user_id,
+        settlement=settlement,
+    )
+
+
+async def assert_settlement_comment_access(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    settlement: Settlement,
+) -> None:
+    """Read access to settlement comments (org member or college auditor)."""
+    try:
+        await resolve_settlement_comment_membership(
+            session,
+            user_id=user_id,
+            settlement=settlement,
+        )
+    except AuditorAccessDenied as exc:
+        raise AuditorAccessDenied(str(exc)) from exc
+
+
 # --- Worklist -------------------------------------------------------------
 
 

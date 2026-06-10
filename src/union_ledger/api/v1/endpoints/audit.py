@@ -7,8 +7,7 @@ Role gates (per transition):
   submit, resubmit  → Treasurer / Admin (the team preparing the settlement)
   approve, reject   → Auditor only      (independent reviewer)
   publish           → Admin only        (final release to public mode)
-  comment / list    → any org member    (auditor mostly, but treasurer can
-                                          reply; we keep it open to the org)
+  comment / list    → org member or same-college auditor
 """
 
 from __future__ import annotations
@@ -42,7 +41,9 @@ from union_ledger.services.audit_comment import (
 )
 from union_ledger.services.audit_workflow import (
     AuditorAccessDenied,
+    assert_settlement_comment_access,
     require_auditor_for_settlement,
+    resolve_settlement_comment_membership,
 )
 from union_ledger.services.notification import (
     notify_audit_approved,
@@ -303,7 +304,7 @@ async def publish(
     "/settlements/{settlement_id}/comments",
     response_model=AuditCommentResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="감사 코멘트 추가 (조직 멤버)",
+    summary="감사 코멘트 추가 (조직 멤버 또는 동일 단과대 감사위원)",
 )
 async def add_comment(
     settlement_id: uuid.UUID,
@@ -312,11 +313,17 @@ async def add_comment(
     session: DbSession,
 ) -> AuditCommentResponse:
     settlement = await _load_settlement_or_404(session, settlement_id)
-    membership = await require_membership_for_org(
-        session,
-        user_id=current_user.id,
-        organization_id=settlement.organization_id,
-    )
+    try:
+        membership = await resolve_settlement_comment_membership(
+            session,
+            user_id=current_user.id,
+            settlement=settlement,
+        )
+    except AuditorAccessDenied as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
     try:
         comment = await create_comment(
             session,
@@ -336,7 +343,7 @@ async def add_comment(
 @router.get(
     "/settlements/{settlement_id}/comments",
     response_model=list[AuditCommentResponse],
-    summary="감사 코멘트 목록 (조직 멤버)",
+    summary="감사 코멘트 목록 (조직 멤버 또는 동일 단과대 감사위원)",
 )
 async def list_settlement_comments(
     settlement_id: uuid.UUID,
@@ -344,10 +351,16 @@ async def list_settlement_comments(
     session: DbSession,
 ) -> list[AuditCommentResponse]:
     settlement = await _load_settlement_or_404(session, settlement_id)
-    await require_membership_for_org(
-        session,
-        user_id=current_user.id,
-        organization_id=settlement.organization_id,
-    )
+    try:
+        await assert_settlement_comment_access(
+            session,
+            user_id=current_user.id,
+            settlement=settlement,
+        )
+    except AuditorAccessDenied as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
     items = await list_comments(session, settlement_id=settlement.id)
     return [AuditCommentResponse.model_validate(item) for item in items]

@@ -474,6 +474,59 @@ async def test_post_comment_member_only(client: AsyncClient) -> None:
     assert forbid.status_code == 403
 
 
+async def test_college_auditor_can_post_and_list_comments(
+    client: AsyncClient,
+) -> None:
+    await signup(client, email="cm_dept@konkuk.ac.kr")
+    dept_admin = await auth_headers(client, "cm_dept@konkuk.ac.kr")
+    dept_org = await create_org_as_admin(
+        client,
+        dept_admin,
+        name="컴퓨터공학부 학생회",
+        college_name="공과대학",
+        department_name="컴퓨터공학부",
+    )
+    settlement = await _create_settlement(
+        client, dept_admin, org_id=dept_org["id"], title="컴공 결산"
+    )
+    await client.post(
+        f"/api/v1/settlements/{settlement['id']}/submit", headers=dept_admin
+    )
+
+    await signup(client, email="cm_auditor_admin@konkuk.ac.kr")
+    auditor_org_admin = await auth_headers(client, "cm_auditor_admin@konkuk.ac.kr")
+    auditor_org = await create_org_as_admin(
+        client,
+        auditor_org_admin,
+        name="기계공학부 학생회",
+        college_name="공과대학",
+        department_name="기계공학부",
+    )
+    auditor_headers = await add_auditor_to_org(
+        client,
+        org_id=auditor_org["id"],
+        admin_headers=auditor_org_admin,
+        auditor_email="cm_college_auditor@konkuk.ac.kr",
+    )
+
+    created = await client.post(
+        f"/api/v1/settlements/{settlement['id']}/comments",
+        headers=auditor_headers,
+        json={"comment": "영수증 금액 확인 필요"},
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["comment"] == "영수증 금액 확인 필요"
+    assert body["author_membership_id"] is not None
+
+    listing = await client.get(
+        f"/api/v1/settlements/{settlement['id']}/comments",
+        headers=auditor_headers,
+    )
+    assert listing.status_code == 200, listing.text
+    assert any(row["id"] == body["id"] for row in listing.json())
+
+
 async def test_post_comment_with_evidence_in_other_settlement_400(
     client: AsyncClient,
 ) -> None:
