@@ -14,6 +14,7 @@ import uuid
 from httpx import AsyncClient
 
 from conftest import (
+    add_auditor_to_org,
     add_treasurer_to_org,
     auth_headers,
     create_org_as_admin,
@@ -208,6 +209,49 @@ async def test_member_can_download_evidence_file(client: AsyncClient) -> None:
 
     resp = await client.get(
         f"/api/v1/evidences/{evidence_id}/file", headers=admin_headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.content == _PNG_BYTES
+
+
+async def test_college_auditor_can_download_other_department_evidence_file(
+    client: AsyncClient,
+) -> None:
+    """Auditors belong to one org but may review every department in their college."""
+    await signup(client, email="evf_dept_admin@konkuk.ac.kr")
+    dept_admin = await auth_headers(client, "evf_dept_admin@konkuk.ac.kr")
+    dept_org = await create_org_as_admin(
+        client,
+        dept_admin,
+        name="컴퓨터공학부 학생회",
+        college_name="공과대학",
+        department_name="컴퓨터공학부",
+    )
+    settlement = await _create_settlement(client, dept_admin, org_id=dept_org["id"])
+    up = await _upload_evidence(
+        client, dept_admin, settlement_id=settlement["id"]
+    )
+    assert up.status_code == 201, up.text
+    evidence_id = up.json()["id"]
+
+    await signup(client, email="evf_auditor_org_admin@konkuk.ac.kr")
+    auditor_org_admin = await auth_headers(client, "evf_auditor_org_admin@konkuk.ac.kr")
+    auditor_org = await create_org_as_admin(
+        client,
+        auditor_org_admin,
+        name="기계공학부 학생회",
+        college_name="공과대학",
+        department_name="기계공학부",
+    )
+    auditor_headers = await add_auditor_to_org(
+        client,
+        org_id=auditor_org["id"],
+        admin_headers=auditor_org_admin,
+        auditor_email="evf_college_auditor@konkuk.ac.kr",
+    )
+
+    resp = await client.get(
+        f"/api/v1/evidences/{evidence_id}/file", headers=auditor_headers
     )
     assert resp.status_code == 200, resp.text
     assert resp.content == _PNG_BYTES

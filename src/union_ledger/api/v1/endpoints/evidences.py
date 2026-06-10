@@ -27,7 +27,9 @@ from union_ledger.schemas.evidence import (
     OCRPreviewResponse,
 )
 from union_ledger.services.evidence import (
+    EvidenceFileAccessDenied,
     EvidenceNotFound,
+    assert_evidence_file_access,
     delete_evidence,
     get_evidence_or_raise,
 )
@@ -241,7 +243,7 @@ async def get_evidence(
 
 @router.get(
     "/evidences/{evidence_id}/file",
-    summary="증빙 원본 파일 (조직 멤버 — 감사 모달/검수 미리보기용)",
+    summary="증빙 원본 파일 (조직 멤버 또는 동일 단과대 감사위원)",
     response_class=FileResponse,
 )
 async def get_evidence_file(
@@ -250,11 +252,17 @@ async def get_evidence_file(
     current_user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> FileResponse:
     evidence = await _get_evidence_or_404(session, evidence_id)
-    await require_membership_for_org(
-        session,
-        user_id=current_user.id,
-        organization_id=evidence.organization_id,
-    )
+    try:
+        await assert_evidence_file_access(
+            session,
+            user_id=current_user.id,
+            evidence=evidence,
+        )
+    except EvidenceFileAccessDenied as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
     path = Path(evidence.source_file_path) if evidence.source_file_path else None
     if path is None or not path.is_file():
         raise HTTPException(
