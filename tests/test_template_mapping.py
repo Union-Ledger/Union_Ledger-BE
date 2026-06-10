@@ -44,3 +44,21 @@ def test_detect_mapping_returns_empty_for_unrecognized_layout() -> None:
     file_bytes = _workbook_bytes([("날짜", ""), ("적요", ""), ("출금", "")])
 
     assert detect_mapping_schema_from_bytes(file_bytes) == {}
+
+
+def test_audit_ledger_takes_priority_over_label_scan() -> None:
+    from pathlib import Path
+
+    fixture = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "settlement_templates"
+        / "audit_ledger_sample.xlsx"
+    )
+    if not fixture.is_file():
+        return
+
+    mapping = detect_mapping_schema_from_bytes(fixture.read_bytes())
+    assert mapping.get("_layout") == "audit_ledger"
+    assert "title" in mapping.values()
+    assert "organization_name" not in mapping.values()

@@ -13,6 +13,7 @@ from typing import Any
 from openpyxl.utils import get_column_letter
 
 from union_ledger.services.bank_statement import read_excel_sheet_rows
+from union_ledger.services.template_ledger import detect_audit_ledger_mapping
 
 # (keywords in label cell, spec field name). Order matters — more specific first.
 _LABEL_FIELD_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
@@ -75,6 +76,10 @@ def detect_mapping_schema_from_bytes(file_bytes: bytes) -> dict[str, Any]:
     """Scan the first worksheet and return `{cell: spec_field}` mappings."""
     if not file_bytes:
         return {}
+
+    audit_mapping = detect_audit_ledger_mapping(file_bytes)
+    if audit_mapping is not None:
+        return audit_mapping
 
     try:
         rows = read_excel_sheet_rows(file_bytes)
