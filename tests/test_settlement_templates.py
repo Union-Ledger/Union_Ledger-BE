@@ -327,3 +327,23 @@ async def test_upload_audit_ledger_ignores_stale_summary_mapping(
     assert body["mapping_schema"]["_layout"] == "audit_ledger"
     assert body["mapping_schema"]["A3"] == "title"
     assert "B1" not in body["mapping_schema"]
+
+
+async def test_upload_deactivates_previous_active_template(
+    client: AsyncClient,
+) -> None:
+    await signup(client, email="t_swap@konkuk.ac.kr")
+    headers = await auth_headers(client, "t_swap@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+
+    first = await _upload_template(client, headers, org_id=org["id"], name="첫 번째")
+    second = await _upload_template(client, headers, org_id=org["id"], name="두 번째")
+
+    listing = await client.get(
+        f"/api/v1/organizations/{org['id']}/templates?include_inactive=true",
+        headers=headers,
+    )
+    assert listing.status_code == 200, listing.text
+    rows = {row["id"]: row for row in listing.json()}
+    assert rows[first["id"]]["is_active"] is False
+    assert rows[second["id"]]["is_active"] is True

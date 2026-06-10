@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from union_ledger.core.config import Settings
-from union_ledger.models.entities import SettlementTemplate
+from union_ledger.models.entities import Settlement, SettlementTemplate
 from union_ledger.services.template_mapping import detect_mapping_schema_from_bytes
 from union_ledger.services.template_ledger import LAYOUT_AUDIT_LEDGER
 
@@ -113,13 +113,13 @@ async def effective_mapping_schema(
     *,
     template: SettlementTemplate,
 ) -> dict[str, Any]:
-    """Return the mapping to use at generation time, self-healing audit ledger templates."""
+    """Return mapping for generation, always re-read from the template file."""
     path = Path(template.file_path)
     if not path.is_file():
         return template.mapping_schema or {}
 
     detected = detect_mapping_schema_from_bytes(path.read_bytes())
-    if detected.get("_layout") != LAYOUT_AUDIT_LEDGER:
+    if not detected:
         return template.mapping_schema or {}
 
     if template.mapping_schema != detected:
@@ -127,6 +127,76 @@ async def effective_mapping_schema(
         await session.commit()
         await session.refresh(template)
     return detected
+
+
+async def get_active_org_template(
+    session: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+) -> SettlementTemplate | None:
+    return await session.scalar(
+        select(SettlementTemplate)
+        .where(
+            SettlementTemplate.organization_id == organization_id,
+            SettlementTemplate.is_active.is_(True),
+        )
+        .order_by(SettlementTemplate.created_at.desc())
+        .limit(1)
+    )
+
+
+async def resolve_template_for_generation(
+    session: AsyncSession,
+    *,
+    settlement: Settlement,
+) -> SettlementTemplate:
+    """Use the org's current active template — not the draft-time snapshot.
+
+    Treasurers often upload the correct audit workbook after the settlement
+    draft was already created. Pinning ``settlement.template_id`` at creation
+    left Excel generation cloning an old summary template forever.
+    """
+    active = await get_active_org_template(
+        session, organization_id=settlement.organization_id
+    )
+    if active is not None:
+        if settlement.template_id != active.id:
+            settlement.template_id = active.id
+            await session.commit()
+            await session.refresh(settlement)
+        return active
+
+    if settlement.template_id is None:
+        raise TemplateNotFound("등록된 결산 템플릿이 없습니다.")
+
+    template = await session.get(SettlementTemplate, settlement.template_id)
+    if template is None:
+        raise TemplateNotFound("템플릿이 삭제되었습니다.")
+    return template
+
+
+async def deactivate_org_templates(
+    session: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    except_template_id: uuid.UUID | None = None,
+) -> None:
+    templates = (
+        await session.scalars(
+            select(SettlementTemplate).where(
+                SettlementTemplate.organization_id == organization_id,
+                SettlementTemplate.is_active.is_(True),
+            )
+        )
+    ).all()
+    changed = False
+    for template in templates:
+        if except_template_id is not None and template.id == except_template_id:
+            continue
+        template.is_active = False
+        changed = True
+    if changed:
+        await session.commit()
 
 
 async def create_template(
@@ -153,6 +223,12 @@ async def create_template(
         is_active=True,
     )
     session.add(template)
+    await session.flush()
+    await deactivate_org_templates(
+        session,
+        organization_id=organization_id,
+        except_template_id=template.id,
+    )
     await session.commit()
     await session.refresh(template)
     return template

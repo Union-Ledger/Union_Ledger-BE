@@ -367,6 +367,97 @@ async def test_download_serves_excel_bytes(
     assert "settlement_excel" in cd
 
 
+async def test_generate_uses_active_template_not_draft_snapshot(
+    client: AsyncClient,
+    db_sessionmaker: async_sessionmaker,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Settlement pinned to an old summary template must still render the active audit workbook."""
+    import uuid
+    from datetime import date
+    from decimal import Decimal
+    from pathlib import Path
+
+    from openpyxl import load_workbook
+
+    from union_ledger.core.config import get_settings
+
+    fixture = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "settlement_templates"
+        / "audit_ledger_sample.xlsx"
+    )
+    if not fixture.is_file():
+        return
+
+    monkeypatch.setattr(get_settings(), "storage_root", tmp_path)
+
+    await signup(client, email="art_active@konkuk.ac.kr")
+    headers = await auth_headers(client, "art_active@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+
+    summary_mapping = {
+        "C2": "academic_year",
+        "C3": "title",
+        "C8": "total_evidence_amount",
+    }
+    summary_template = await _upload_template(
+        client, headers, org_id=org["id"], mapping=summary_mapping
+    )
+    settlement = await _create_settlement_with_template(
+        client, headers, org_id=org["id"], template_id=summary_template["id"]
+    )
+
+    files = {
+        "file": (
+            "audit_ledger_sample.xlsx",
+            io.BytesIO(fixture.read_bytes()),
+            "application/vnd.ms-excel",
+        )
+    }
+    audit_resp = await client.post(
+        f"/api/v1/organizations/{org['id']}/templates",
+        headers=headers,
+        files=files,
+        data={"name": "공과대 예결산안"},
+    )
+    assert audit_resp.status_code == 201, audit_resp.text
+    audit_template = audit_resp.json()
+    assert audit_template["mapping_schema"]["_layout"] == "audit_ledger"
+
+    await _seed_image_evidence(
+        db_sessionmaker,
+        settlement_id=uuid.UUID(settlement["id"]),
+        organization_id=uuid.UUID(org["id"]),
+        storage_root=tmp_path,
+        evidence_date=date(2025, 12, 23),
+        amount=Decimal("85000"),
+    )
+
+    gen = await client.post(
+        f"/api/v1/settlements/{settlement['id']}/artifacts:generate",
+        headers=headers,
+    )
+    assert gen.status_code == 200, gen.text
+    body = gen.json()
+    assert body["excel"]["status"] == "completed"
+
+    wb = load_workbook(body["excel"]["file_path"])
+    sheet = wb.active
+    assert sheet["A3"].value == settlement["title"]
+    assert sheet["G1"].value is not None
+    wb.close()
+
+    refreshed = await client.get(
+        f"/api/v1/settlements/{settlement['id']}",
+        headers=headers,
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["template_id"] == audit_template["id"]
+
+
 async def test_download_404_for_unknown(client: AsyncClient) -> None:
     await signup(client, email="art_404@konkuk.ac.kr")
     headers = await auth_headers(client, "art_404@konkuk.ac.kr")

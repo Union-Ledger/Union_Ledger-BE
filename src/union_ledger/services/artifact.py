@@ -66,7 +66,11 @@ from union_ledger.services.template_ledger import (
     fill_audit_ledger,
     format_korean_header_date,
 )
-from union_ledger.services.settlement_template import effective_mapping_schema
+from union_ledger.services.settlement_template import (
+    TemplateNotFound as SettlementTemplateNotFound,
+    effective_mapping_schema,
+    resolve_template_for_generation,
+)
 
 # Image suffixes we know PIL can convert to PDF without further work.
 _IMAGE_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
@@ -486,11 +490,12 @@ async def generate_settlement_artifacts(
     excel_row.status = ArtifactStatus.PROCESSING
     await session.commit()
     try:
-        if settlement.template_id is None:
-            raise TemplateMissing("결산안에 연결된 템플릿이 없습니다.")
-        template = await session.get(SettlementTemplate, settlement.template_id)
-        if template is None:
-            raise TemplateMissing("템플릿이 삭제되었습니다.")
+        try:
+            template = await resolve_template_for_generation(
+                session, settlement=settlement
+            )
+        except SettlementTemplateNotFound as exc:
+            raise TemplateMissing(str(exc)) from exc
 
         mapping_schema = await effective_mapping_schema(session, template=template)
 
