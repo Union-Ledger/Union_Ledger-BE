@@ -51,7 +51,23 @@ class SettlementNotFound(SettlementError):
 
 
 class SettlementNotEditable(SettlementError):
-    """Raised when attempting to mutate a non-DRAFT settlement."""
+    """Raised when attempting to mutate a settlement outside editable states."""
+
+
+_EVIDENCE_MUTABLE_STATUSES = frozenset(
+    {SettlementStatus.DRAFT, SettlementStatus.REJECTED}
+)
+
+
+def settlement_allows_evidence_mutation(settlement: Settlement) -> bool:
+    return settlement.status in _EVIDENCE_MUTABLE_STATUSES
+
+
+def assert_settlement_allows_evidence_mutation(settlement: Settlement) -> None:
+    if not settlement_allows_evidence_mutation(settlement):
+        raise SettlementNotEditable(
+            "작성 중 또는 반려된 결산안에서만 증빙을 변경할 수 있습니다."
+        )
 
 
 class TemplateNotFound(SettlementError):

@@ -41,9 +41,33 @@ from union_ledger.services.file_storage import (
     LocalFileStorage,
     read_upload_within_limit,
 )
+from union_ledger.services.settlement import (
+    SettlementNotEditable,
+    assert_settlement_allows_evidence_mutation,
+)
 
 router = APIRouter(tags=["evidences", "ocr"])
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
+
+
+def _evidence_mutation_blocked(exc: SettlementNotEditable) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+
+async def _require_evidence_mutable_settlement(
+    session: AsyncSession, settlement_id: uuid.UUID
+) -> Settlement:
+    settlement = await session.get(Settlement, settlement_id)
+    if settlement is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="결산안을 찾을 수 없습니다.",
+        )
+    try:
+        assert_settlement_allows_evidence_mutation(settlement)
+    except SettlementNotEditable as exc:
+        raise _evidence_mutation_blocked(exc) from exc
+    return settlement
 
 
 @router.get(
@@ -135,6 +159,10 @@ async def upload_evidence(
         organization_id=settlement.organization_id,
         allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
+    try:
+        assert_settlement_allows_evidence_mutation(settlement)
+    except SettlementNotEditable as exc:
+        raise _evidence_mutation_blocked(exc) from exc
 
     storage = LocalFileStorage(get_settings())
     try:
@@ -258,6 +286,7 @@ async def extract_evidence(
         organization_id=evidence.organization_id,
         allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
+    await _require_evidence_mutable_settlement(session, evidence.settlement_id)
     evidence.status = EvidenceStatus.EXTRACTING
     await session.commit()
 
@@ -320,6 +349,7 @@ async def update_evidence(
         organization_id=evidence.organization_id,
         allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
+    await _require_evidence_mutable_settlement(session, evidence.settlement_id)
 
     if "evidence_date" in payload.model_fields_set:
         evidence.evidence_date = payload.evidence_date
@@ -364,6 +394,7 @@ async def remove_evidence(
         organization_id=evidence.organization_id,
         allowed_roles={RoleType.TREASURER, RoleType.PRESIDENT},
     )
+    await _require_evidence_mutable_settlement(session, evidence.settlement_id)
 
     await delete_evidence(session, evidence=evidence)
 

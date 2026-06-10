@@ -100,7 +100,7 @@ async def user_visible_colleges(
 async def _settlement_aggregates(
     session: AsyncSession, *, settlement_ids: Sequence[uuid.UUID]
 ) -> dict[uuid.UUID, tuple[Decimal, int]]:
-    """Per-settlement (sum(abs(amount)), evidence_count)."""
+    """Per-settlement (sum(abs(amount)), evidence_count) at publish snapshot."""
     if not settlement_ids:
         return {}
     rows = await session.execute(
@@ -109,7 +109,12 @@ async def _settlement_aggregates(
             func.coalesce(func.sum(evidence_signed_amount()), 0),
             func.count(Evidence.id),
         )
-        .where(Evidence.settlement_id.in_(settlement_ids))
+        .join(Settlement, Settlement.id == Evidence.settlement_id)
+        .where(
+            Evidence.settlement_id.in_(settlement_ids),
+            Settlement.published_at.is_not(None),
+            Evidence.created_at <= Settlement.published_at,
+        )
         .group_by(Evidence.settlement_id)
     )
     return {
@@ -225,7 +230,10 @@ async def list_public_items(
 
     rows = await session.scalars(
         select(Evidence)
-        .where(Evidence.settlement_id == settlement.id)
+        .where(
+            Evidence.settlement_id == settlement.id,
+            Evidence.created_at <= settlement.published_at,
+        )
         .order_by(
             Evidence.evidence_date.asc().nullslast(),
             Evidence.created_at.asc(),
@@ -250,6 +258,11 @@ async def get_public_evidence(
     colleges = await user_visible_colleges(session, user_id=user_id)
     if org is None or org.college_name not in colleges:
         raise EvidenceNotPublic("열람 권한이 없는 증빙입니다.")
+    if (
+        settlement.published_at is not None
+        and evidence.created_at > settlement.published_at
+    ):
+        raise EvidenceNotPublic("이 증빙은 공개된 결산안에 속하지 않습니다.")
     return evidence
 
 

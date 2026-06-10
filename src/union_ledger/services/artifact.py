@@ -61,11 +61,6 @@ from union_ledger.models.enums import (
     ArtifactType,
     MatchStatus,
 )
-from union_ledger.services.template_ledger import (
-    LAYOUT_AUDIT_LEDGER,
-    fill_audit_ledger,
-    format_korean_header_date,
-)
 
 # Image suffixes we know PIL can convert to PDF without further work.
 _IMAGE_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
@@ -331,7 +326,6 @@ def render_settlement_excel(
     template_path: Path,
     mapping_schema: dict[str, Any],
     spec_fields: dict[str, Any],
-    evidences: Sequence[Evidence] | None = None,
 ) -> bytes:
     """Open template, write each `mapping[cell] = spec_field` value, return bytes."""
     wb = _load_template_workbook(template_path)
@@ -341,10 +335,6 @@ def render_settlement_excel(
         wb.close()
         raise ArtifactError("템플릿에 활성 시트가 없습니다.")
 
-    layout = mapping_schema.get("_layout")
-    ledger_config = mapping_schema.get("_ledger")
-    evidence_rows = list(evidences or [])
-
     for cell_addr, field_name in mapping_schema.items():
         if not isinstance(cell_addr, str) or not _is_valid_cell_address(cell_addr):
             # Skip silently — a malformed entry shouldn't take down the whole
@@ -353,23 +343,10 @@ def render_settlement_excel(
         if not isinstance(field_name, str) or field_name not in _SUPPORTED_SPEC_FIELDS:
             continue
         value = spec_fields.get(field_name)
-        if layout == LAYOUT_AUDIT_LEDGER and field_name == "generated_at":
-            value = format_korean_header_date(value)
         if isinstance(value, Decimal):
             # openpyxl stores Decimal as Python int/float; cast for cleaner Excel output.
             value = float(value)
         sheet[cell_addr] = value
-
-    if (
-        layout == LAYOUT_AUDIT_LEDGER
-        and isinstance(ledger_config, dict)
-        and evidence_rows
-    ):
-        fill_audit_ledger(
-            sheet,
-            evidences=list(evidence_rows),
-            ledger_config=ledger_config,
-        )
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -498,7 +475,6 @@ async def generate_settlement_artifacts(
             template_path=Path(template.file_path),
             mapping_schema=template.mapping_schema or {},
             spec_fields=spec_fields,
-            evidences=list(snapshot.evidences),
         )
         excel_path = _write_bytes(out_dir, ".xlsx", excel_bytes)
         excel_row.file_path = str(excel_path)

@@ -229,3 +229,81 @@ async def test_non_member_cannot_download_evidence_file(client: AsyncClient) -> 
         f"/api/v1/evidences/{evidence_id}/file", headers=out_headers
     )
     assert resp.status_code == 403, resp.text
+
+
+async def test_cannot_mutate_evidence_after_approval(client: AsyncClient) -> None:
+    from conftest import add_auditor_to_org
+
+    await signup(client, email="ev_lock_admin@konkuk.ac.kr")
+    admin_headers = await auth_headers(client, "ev_lock_admin@konkuk.ac.kr")
+    org = await create_org_as_admin(client, admin_headers)
+    auditor_headers = await add_auditor_to_org(
+        client,
+        org_id=org["id"],
+        admin_headers=admin_headers,
+        auditor_email="ev_lock_auditor@konkuk.ac.kr",
+    )
+    settlement = await _create_settlement(client, admin_headers, org_id=org["id"])
+    up = await _upload_evidence(
+        client, admin_headers, settlement_id=settlement["id"]
+    )
+    assert up.status_code == 201, up.text
+    evidence_id = up.json()["id"]
+
+    submit = await client.post(
+        f"/api/v1/settlements/{settlement['id']}/submit", headers=admin_headers
+    )
+    assert submit.status_code == 200, submit.text
+    approve = await client.post(
+        f"/api/v1/settlements/{settlement['id']}/audit/approve",
+        headers=auditor_headers,
+        json={},
+    )
+    assert approve.status_code == 200, approve.text
+
+    blocked_upload = await _upload_evidence(
+        client, admin_headers, settlement_id=settlement["id"]
+    )
+    assert blocked_upload.status_code == 409, blocked_upload.text
+
+    blocked_patch = await client.patch(
+        f"/api/v1/evidences/{evidence_id}",
+        headers=admin_headers,
+        json={"merchant_name": "승인 후 수정"},
+    )
+    assert blocked_patch.status_code == 409, blocked_patch.text
+
+    blocked_delete = await client.delete(
+        f"/api/v1/evidences/{evidence_id}", headers=admin_headers
+    )
+    assert blocked_delete.status_code == 409, blocked_delete.text
+
+
+async def test_rejected_settlement_allows_evidence_upload(client: AsyncClient) -> None:
+    from conftest import add_auditor_to_org
+
+    await signup(client, email="ev_rej_admin@konkuk.ac.kr")
+    admin_headers = await auth_headers(client, "ev_rej_admin@konkuk.ac.kr")
+    org = await create_org_as_admin(client, admin_headers)
+    auditor_headers = await add_auditor_to_org(
+        client,
+        org_id=org["id"],
+        admin_headers=admin_headers,
+        auditor_email="ev_rej_auditor@konkuk.ac.kr",
+    )
+    settlement = await _create_settlement(client, admin_headers, org_id=org["id"])
+
+    await client.post(
+        f"/api/v1/settlements/{settlement['id']}/submit", headers=admin_headers
+    )
+    reject = await client.post(
+        f"/api/v1/settlements/{settlement['id']}/audit/reject",
+        headers=auditor_headers,
+        json={"comment": "보완 필요"},
+    )
+    assert reject.status_code == 200, reject.text
+
+    up = await _upload_evidence(
+        client, admin_headers, settlement_id=settlement["id"]
+    )
+    assert up.status_code == 201, up.text

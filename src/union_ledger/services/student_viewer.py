@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from union_ledger.models.entities import (
@@ -183,7 +183,14 @@ async def settlement_aggregates(
             func.coalesce(func.sum(evidence_signed_amount()), 0),
             func.count(Evidence.id),
         )
-        .where(Evidence.settlement_id.in_(settlement_ids))
+        .join(Settlement, Settlement.id == Evidence.settlement_id)
+        .where(
+            Evidence.settlement_id.in_(settlement_ids),
+            or_(
+                Settlement.published_at.is_(None),
+                Evidence.created_at <= Settlement.published_at,
+            ),
+        )
         .group_by(Evidence.settlement_id)
     )
     return {
