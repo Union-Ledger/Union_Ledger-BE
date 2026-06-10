@@ -148,6 +148,10 @@ async def upload_evidence(
     file: Annotated[UploadFile, File()],
     session: DbSession,
     current_user: Annotated[AuthUser, Depends(get_current_user)],
+    # 구분 (ledger group, e.g. "중간고사 간식행사") — applied per upload batch.
+    group_name: Annotated[str | None, Form()] = None,
+    # Category chosen at upload time (empty = AI auto-classify on extract).
+    budget_category: Annotated[str | None, Form()] = None,
 ) -> EvidenceResponse:
     settlement = await session.get(Settlement, settlement_id)
     if settlement is None:
@@ -181,6 +185,8 @@ async def upload_evidence(
         evidence_type=evidence_type,
         source_file_name=stored_file.original_name,
         source_file_path=str(stored_file.absolute_path),
+        group_name=(group_name or "").strip() or None,
+        budget_category=(budget_category or "").strip() or None,
         extracted_payload={
             "content_type": stored_file.content_type,
             "file_size": stored_file.size,
@@ -369,6 +375,8 @@ async def update_evidence(
         evidence.payment_method = payload.payment_method
     if "budget_category" in payload.model_fields_set:
         evidence.budget_category = payload.budget_category
+    if "group_name" in payload.model_fields_set:
+        evidence.group_name = (payload.group_name or "").strip() or None
     if "is_refund" in payload.model_fields_set and payload.is_refund is not None:
         evidence.is_refund = payload.is_refund
     if "status" in payload.model_fields_set and payload.status is not None:

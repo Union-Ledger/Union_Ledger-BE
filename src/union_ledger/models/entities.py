@@ -256,6 +256,10 @@ class Evidence(TimestampedUUIDModel):
         _enum_column(PaymentMethod, "payment_method")
     )
     budget_category: Mapped[str | None] = mapped_column(String(120))
+    # 구분 — the ledger event/purpose group (e.g. "중간고사 간식행사"). This is
+    # context only the treasurer knows; receipts can't reveal it, so it is
+    # human-entered (applied per upload batch) and never AI-decided.
+    group_name: Mapped[str | None] = mapped_column(String(120))
     # Refund/cancellation receipt (환불·취소·반품). Amount stays a positive
     # magnitude; aggregations subtract it so settlement totals net out.
     is_refund: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

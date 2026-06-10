@@ -162,6 +162,21 @@ def _write_cell(sheet: Worksheet, row: int, col_idx: int, value: object) -> None
     sheet.cell(row=row, column=col_idx + 1, value=value)
 
 
+UNGROUPED_LABEL = "미분류"
+
+
+def _group_key(evidence: Evidence) -> str:
+    """구분 grouping key — empty string when the treasurer didn't assign one."""
+    return (evidence.group_name or "").strip()
+
+
+def _evidence_income_expense(evidence: Evidence) -> tuple[Decimal, Decimal]:
+    magnitude = abs(evidence.amount or Decimal(0))
+    if evidence.is_refund:
+        return magnitude, Decimal(0)
+    return Decimal(0), magnitude
+
+
 def _write_evidence_row(
     sheet: Worksheet,
     *,
@@ -171,33 +186,27 @@ def _write_evidence_row(
     seq: int,
     month: int,
     running_balance: Decimal,
+    category_label: str | None,
 ) -> Decimal:
-    amount = evidence.amount or Decimal(0)
-    magnitude = abs(amount)
-    income = Decimal(0)
-    expense = Decimal(0)
-    if evidence.is_refund:
-        income = magnitude
-    else:
-        expense = magnitude
+    """Write one ledger item row.
 
+    구분(category) column carries the ledger group (행사/용도) — passed in by the
+    caller so it appears only on the first row of a group, like the sample
+    ledgers. 항목(item) column is the merchant from OCR.
+    """
+    income, expense = _evidence_income_expense(evidence)
     running_balance = running_balance + income - expense
 
     if "date" in columns:
         _write_cell(sheet, row, columns["date"], format_ledger_date(evidence.evidence_date))
     if "category" in columns:
-        _write_cell(
-            sheet,
-            row,
-            columns["category"],
-            evidence.merchant_name or evidence.budget_category or "",
-        )
+        _write_cell(sheet, row, columns["category"], category_label or "")
     if "item" in columns:
         _write_cell(
             sheet,
             row,
             columns["item"],
-            evidence.budget_category or evidence.merchant_name or "",
+            evidence.merchant_name or evidence.budget_category or "",
         )
     if "income" in columns:
         _write_cell(sheet, row, columns["income"], float(income) if income else None)
@@ -211,6 +220,24 @@ def _write_evidence_row(
         _write_cell(sheet, row, columns["receipt"], f"{month}*{seq}")
 
     return running_balance
+
+
+def _write_subtotal_row(
+    sheet: Worksheet,
+    *,
+    row: int,
+    columns: dict[str, int],
+    label: str,
+    income: Decimal,
+    expense: Decimal,
+) -> None:
+    """구분 소계 row — '{구분} 소계' with the group's income/expense totals."""
+    if "item" in columns:
+        _write_cell(sheet, row, columns["item"], f"{label} 소계")
+    if "income" in columns:
+        _write_cell(sheet, row, columns["income"], float(income))
+    if "expense" in columns:
+        _write_cell(sheet, row, columns["expense"], float(expense))
 
 
 def fill_audit_ledger(
@@ -260,23 +287,97 @@ def fill_audit_ledger(
         header_row = section["header_row"] + 1
         settlement_row = section["settlement_row"] + 1
 
+        # 구분(group) blocks in first-appearance order (evidences are already
+        # date-sorted). Items without a 구분 fall under 미분류 — but only when
+        # the month actually uses groups; otherwise we keep flat rows with the
+        # budget category in the 구분 column (legacy data stays sensible).
+        groups: list[tuple[str, list[Evidence]]] = []
+        group_index: dict[str, int] = {}
+        for evidence in month_evidences:
+            key = _group_key(evidence)
+            if key not in group_index:
+                group_index[key] = len(groups)
+                groups.append((key, []))
+            groups[group_index[key]][1].append(evidence)
+        emit_subtotals = any(key for key, _ in groups)
+
+        total_rows = len(month_evidences) + (len(groups) if emit_subtotals else 0)
+
         delete_start = header_row + 1
         delete_count = settlement_row - delete_start
+
+        # The template's example rows often merge the 구분 column across a
+        # block. delete_rows/insert_rows don't reliably adjust merged ranges,
+        # leaving phantom merges over our data rows — unmerge anything that
+        # intersects the example region before mutating it.
+        for merged_range in list(sheet.merged_cells.ranges):
+            if (
+                merged_range.max_row >= delete_start
+                and merged_range.min_row <= settlement_row - 1
+            ):
+                sheet.unmerge_cells(str(merged_range))
+
         if delete_count > 0:
             sheet.delete_rows(delete_start, delete_count)
 
         insert_at = header_row + 1
-        sheet.insert_rows(insert_at, len(month_evidences))
+        sheet.insert_rows(insert_at, total_rows)
 
         running_balance = Decimal(0)
-        for seq, evidence in enumerate(month_evidences, start=1):
-            row = insert_at + seq - 1
-            running_balance = _write_evidence_row(
-                sheet,
-                row=row,
-                evidence=evidence,
-                columns=normalized_columns,
-                seq=seq,
-                month=month,
-                running_balance=running_balance,
+        month_income = Decimal(0)
+        month_expense = Decimal(0)
+        row = insert_at
+        seq = 0
+        for key, items in groups:
+            group_label = key or UNGROUPED_LABEL
+            group_income = Decimal(0)
+            group_expense = Decimal(0)
+            for position, evidence in enumerate(items):
+                seq += 1
+                if emit_subtotals:
+                    # 구분 appears on the first row of its block (sample style).
+                    category_label = group_label if position == 0 else ""
+                else:
+                    category_label = evidence.budget_category or ""
+                income, expense = _evidence_income_expense(evidence)
+                group_income += income
+                group_expense += expense
+                running_balance = _write_evidence_row(
+                    sheet,
+                    row=row,
+                    evidence=evidence,
+                    columns=normalized_columns,
+                    seq=seq,
+                    month=month,
+                    running_balance=running_balance,
+                    category_label=category_label,
+                )
+                row += 1
+            month_income += group_income
+            month_expense += group_expense
+            if emit_subtotals:
+                _write_subtotal_row(
+                    sheet,
+                    row=row,
+                    columns=normalized_columns,
+                    label=group_label,
+                    income=group_income,
+                    expense=group_expense,
+                )
+                row += 1
+
+        # 'N월 정산' row — write the month totals explicitly (template formulas
+        # don't survive the row delete/insert above).
+        new_settlement_row = settlement_row - delete_count + total_rows
+        if "income" in normalized_columns:
+            _write_cell(
+                sheet, new_settlement_row, normalized_columns["income"], float(month_income)
+            )
+        if "expense" in normalized_columns:
+            _write_cell(
+                sheet, new_settlement_row, normalized_columns["expense"], float(month_expense)
+            )
+        if "balance" in normalized_columns:
+            _write_cell(
+                sheet, new_settlement_row, normalized_columns["balance"], float(running_balance)
             )
