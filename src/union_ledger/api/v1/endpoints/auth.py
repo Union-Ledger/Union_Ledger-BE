@@ -55,6 +55,17 @@ def _validate_university_email(email: str) -> str:
     return normalized
 
 
+async def _ensure_email_available_for_signup(
+    session: AsyncSession, email: str
+) -> None:
+    existing_user = await session.scalar(select(User).where(User.email == email))
+    if existing_user is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 가입된 이메일입니다.",
+        )
+
+
 @router.post(
     "/send-verification-code",
     response_model=SendVerificationCodeResponse,
@@ -65,6 +76,7 @@ async def send_verification_code(
     session: AsyncSession = Depends(get_db_session),
 ) -> SendVerificationCodeResponse:
     email = _validate_university_email(payload.email)
+    await _ensure_email_available_for_signup(session, email)
     code, expires_in = await issue_code(session, email)
 
     try:
@@ -94,6 +106,7 @@ async def verify_email(
     session: AsyncSession = Depends(get_db_session),
 ) -> VerifyEmailCodeResponse:
     email = _validate_university_email(payload.email)
+    await _ensure_email_available_for_signup(session, email)
     verified = await verify_code(session, email, payload.code.strip())
     if not verified:
         raise HTTPException(
