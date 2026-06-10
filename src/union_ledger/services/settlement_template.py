@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from union_ledger.core.config import Settings
 from union_ledger.models.entities import SettlementTemplate
+from union_ledger.services.template_mapping import detect_mapping_schema_from_bytes
 
 SUPPORTED_TEMPLATE_SUFFIXES = {".xlsx", ".xls"}
 
@@ -92,6 +93,16 @@ async def save_template_file(
     )
 
 
+def resolve_mapping_schema(
+    file_bytes: bytes,
+    mapping_schema: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Use explicit mapping when provided; otherwise auto-detect from labels."""
+    if mapping_schema:
+        return mapping_schema
+    return detect_mapping_schema_from_bytes(file_bytes)
+
+
 async def create_template(
     session: AsyncSession,
     *,
@@ -99,13 +110,18 @@ async def create_template(
     name: str,
     stored_file: StoredTemplate,
     mapping_schema: dict[str, Any] | None = None,
+    file_bytes: bytes | None = None,
 ) -> SettlementTemplate:
+    resolved_mapping = mapping_schema or {}
+    if not resolved_mapping and file_bytes:
+        resolved_mapping = resolve_mapping_schema(file_bytes, None)
+
     template = SettlementTemplate(
         organization_id=organization_id,
         name=name,
         original_filename=stored_file.original_name,
         file_path=str(stored_file.absolute_path),
-        mapping_schema=mapping_schema or {},
+        mapping_schema=resolved_mapping,
         is_active=True,
     )
     session.add(template)

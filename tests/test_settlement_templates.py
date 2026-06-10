@@ -76,8 +76,32 @@ async def test_upload_template_default_empty_mapping(client: AsyncClient) -> Non
     await signup(client, email="t_empty@konkuk.ac.kr")
     headers = await auth_headers(client, "t_empty@konkuk.ac.kr")
     org = await create_org_as_admin(client, headers)
-    template = await _upload_template(client, headers, org_id=org["id"])
-    assert template["mapping_schema"] == {}
+
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "제목"
+    ws["A2"] = "학년도"
+    ws["A3"] = "총 지출액"
+    buf = BytesIO()
+    wb.save(buf)
+    template_bytes = buf.getvalue()
+
+    files = {"file": ("template.xlsx", BytesIO(template_bytes), "application/vnd.ms-excel")}
+    resp = await client.post(
+        f"/api/v1/organizations/{org['id']}/templates",
+        headers=headers,
+        files=files,
+        data={"name": "자동매핑"},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["mapping_schema"]["B1"] == "title"
+    assert body["mapping_schema"]["B2"] == "academic_year"
+    assert body["mapping_schema"]["B3"] == "total_evidence_amount"
 
 
 async def test_upload_template_rejects_non_excel(client: AsyncClient) -> None:
