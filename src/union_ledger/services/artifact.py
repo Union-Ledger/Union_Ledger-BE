@@ -66,6 +66,7 @@ from union_ledger.services.template_ledger import (
     fill_audit_ledger,
     format_korean_header_date,
 )
+from union_ledger.services.settlement_template import effective_mapping_schema
 
 # Image suffixes we know PIL can convert to PDF without further work.
 _IMAGE_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
@@ -491,9 +492,11 @@ async def generate_settlement_artifacts(
         if template is None:
             raise TemplateMissing("템플릿이 삭제되었습니다.")
 
+        mapping_schema = await effective_mapping_schema(session, template=template)
+
         excel_bytes = render_settlement_excel(
             template_path=Path(template.file_path),
-            mapping_schema=template.mapping_schema or {},
+            mapping_schema=mapping_schema,
             spec_fields=spec_fields,
             evidences=list(snapshot.evidences),
         )

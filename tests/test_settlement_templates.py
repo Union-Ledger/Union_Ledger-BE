@@ -284,3 +284,46 @@ async def test_delete_template_deactivates(client: AsyncClient) -> None:
     resp = await client.delete(f"/api/v1/templates/{t['id']}", headers=headers)
     assert resp.status_code == 200
     assert resp.json()["is_active"] is False
+
+
+async def test_upload_audit_ledger_ignores_stale_summary_mapping(
+    client: AsyncClient,
+) -> None:
+    import json
+    from pathlib import Path
+
+    fixture = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "settlement_templates"
+        / "audit_ledger_sample.xlsx"
+    )
+    if not fixture.is_file():
+        return
+
+    await signup(client, email="t_audit@konkuk.ac.kr")
+    headers = await auth_headers(client, "t_audit@konkuk.ac.kr")
+    org = await create_org_as_admin(client, headers)
+
+    files = {
+        "file": (
+            "audit_ledger_sample.xlsx",
+            io.BytesIO(fixture.read_bytes()),
+            "application/vnd.ms-excel",
+        )
+    }
+    data = {
+        "name": "공과대 예결산안",
+        "mapping_schema": json.dumps({"B1": "title", "B2": "academic_year"}),
+    }
+    resp = await client.post(
+        f"/api/v1/organizations/{org['id']}/templates",
+        headers=headers,
+        files=files,
+        data=data,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["mapping_schema"]["_layout"] == "audit_ledger"
+    assert body["mapping_schema"]["A3"] == "title"
+    assert "B1" not in body["mapping_schema"]

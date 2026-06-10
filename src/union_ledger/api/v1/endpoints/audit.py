@@ -23,6 +23,7 @@ from union_ledger.api.deps.auth import (
     get_current_user,
     require_membership_for_org,
 )
+from union_ledger.core.config import get_settings
 from union_ledger.db.session import get_db_session
 from union_ledger.models.entities import Settlement
 from union_ledger.models.enums import RoleType
@@ -33,6 +34,7 @@ from union_ledger.schemas.audit import (
 )
 from union_ledger.schemas.auth_response import AuthUser
 from union_ledger.schemas.settlement import SettlementResponse
+from union_ledger.services.artifact import generate_settlement_artifacts
 from union_ledger.services.audit_comment import (
     EvidenceNotInSettlement,
     create_comment,
@@ -133,6 +135,11 @@ async def submit(
         settlement = await submit_settlement(session, settlement=settlement)
     except IllegalStatusTransition as exc:
         raise _bad_transition(exc) from exc
+    await generate_settlement_artifacts(
+        session,
+        settings=get_settings(),
+        settlement=settlement,
+    )
     await notify_settlement_submitted(
         session, settlement=settlement, actor_user_id=current_user.id
     )
@@ -161,6 +168,11 @@ async def resubmit(
         settlement = await resubmit_settlement(session, settlement=settlement)
     except IllegalStatusTransition as exc:
         raise _bad_transition(exc) from exc
+    await generate_settlement_artifacts(
+        session,
+        settings=get_settings(),
+        settlement=settlement,
+    )
     await _maybe_attach_decision_comment(
         session,
         settlement=settlement,

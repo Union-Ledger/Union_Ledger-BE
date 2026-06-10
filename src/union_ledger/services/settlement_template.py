@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from union_ledger.core.config import Settings
 from union_ledger.models.entities import SettlementTemplate
 from union_ledger.services.template_mapping import detect_mapping_schema_from_bytes
+from union_ledger.services.template_ledger import LAYOUT_AUDIT_LEDGER
 
 SUPPORTED_TEMPLATE_SUFFIXES = {".xlsx", ".xls"}
 
@@ -97,10 +98,35 @@ def resolve_mapping_schema(
     file_bytes: bytes,
     mapping_schema: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Use explicit mapping when provided; otherwise auto-detect from labels."""
-    if mapping_schema:
-        return mapping_schema
-    return detect_mapping_schema_from_bytes(file_bytes)
+    """Prefer audit-ledger auto-detection; ignore stale summary mappings from the FE."""
+    detected = detect_mapping_schema_from_bytes(file_bytes)
+    explicit = mapping_schema or {}
+    if detected.get("_layout") == LAYOUT_AUDIT_LEDGER:
+        return detected
+    if explicit:
+        return explicit
+    return detected
+
+
+async def effective_mapping_schema(
+    session: AsyncSession,
+    *,
+    template: SettlementTemplate,
+) -> dict[str, Any]:
+    """Return the mapping to use at generation time, self-healing audit ledger templates."""
+    path = Path(template.file_path)
+    if not path.is_file():
+        return template.mapping_schema or {}
+
+    detected = detect_mapping_schema_from_bytes(path.read_bytes())
+    if detected.get("_layout") != LAYOUT_AUDIT_LEDGER:
+        return template.mapping_schema or {}
+
+    if template.mapping_schema != detected:
+        template.mapping_schema = detected
+        await session.commit()
+        await session.refresh(template)
+    return detected
 
 
 async def create_template(
@@ -112,9 +138,11 @@ async def create_template(
     mapping_schema: dict[str, Any] | None = None,
     file_bytes: bytes | None = None,
 ) -> SettlementTemplate:
-    resolved_mapping = mapping_schema or {}
-    if not resolved_mapping and file_bytes:
-        resolved_mapping = resolve_mapping_schema(file_bytes, None)
+    resolved_mapping = (
+        resolve_mapping_schema(file_bytes, mapping_schema)
+        if file_bytes
+        else (mapping_schema or {})
+    )
 
     template = SettlementTemplate(
         organization_id=organization_id,
