@@ -80,6 +80,8 @@ class PublicSettlementItem(BaseModel):
     amount: Decimal | None
     payment_method: PaymentMethod | None
     budget_category: str | None
+    # 구분 — event/purpose group; what the public breakdown displays.
+    group_name: str | None
     has_evidence_file: bool
 
 
@@ -92,5 +94,6 @@ class PublicEvidenceDetail(BaseModel):
     amount: Decimal | None
     payment_method: PaymentMethod | None
     budget_category: str | None
+    group_name: str | None
     source_file_name: str
     has_evidence_file: bool

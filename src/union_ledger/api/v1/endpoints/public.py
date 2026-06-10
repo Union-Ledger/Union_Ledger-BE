@@ -173,6 +173,7 @@ async def get_published_items(
             amount=ev.amount,
             payment_method=ev.payment_method,
             budget_category=ev.budget_category,
+            group_name=ev.group_name,
             has_evidence_file=_has_file(ev.source_file_path),
         )
         for ev in evidences
@@ -211,6 +212,7 @@ async def get_published_evidence(
         amount=evidence.amount,
         payment_method=evidence.payment_method,
         budget_category=evidence.budget_category,
+        group_name=evidence.group_name,
         source_file_name=evidence.source_file_name,
         has_evidence_file=_has_file(evidence.source_file_path),
     )

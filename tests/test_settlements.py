@@ -27,6 +27,7 @@ async def _seed_evidence(
     organization_id: uuid.UUID,
     amount: Decimal,
     budget_category: str | None,
+    group_name: str | None = None,
     merchant: str = "테스트 상호",
 ) -> None:
     async with db_sessionmaker() as session:
@@ -42,6 +43,7 @@ async def _seed_evidence(
             merchant_name=merchant,
             amount=amount,
             budget_category=budget_category,
+            group_name=group_name,
         )
         session.add(ev)
         await session.commit()
@@ -347,22 +349,23 @@ async def test_expense_summary_semester_2_period(client: AsyncClient) -> None:
     assert body["period_end"] == "2025-02-28"
 
 
-async def test_expense_summary_groups_by_category(
+async def test_expense_summary_groups_by_구분(
     client: AsyncClient, db_sessionmaker: async_sessionmaker
 ) -> None:
-    """Mix of categories — verify sums, counts, and descending-amount order."""
+    """Summary buckets by 구분(group_name) — sums, counts, desc-amount order."""
     await signup(client, email="es_groups@konkuk.ac.kr")
     headers = await auth_headers(client, "es_groups@konkuk.ac.kr")
     org = await create_org_as_admin(client, headers)
     s = await _create_settlement(client, headers, org_id=org["id"])
 
-    # 행사비: 2건, 합 3,000,000
+    # 중간고사 간식행사: 2건, 합 3,000,000 (카테고리는 배경 데이터일 뿐)
     await _seed_evidence(
         db_sessionmaker,
         settlement_id=uuid.UUID(s["id"]),
         organization_id=uuid.UUID(org["id"]),
         amount=Decimal("1000000"),
-        budget_category="행사비",
+        budget_category="식비",
+        group_name="중간고사 간식행사",
         merchant="행사1",
     )
     await _seed_evidence(
@@ -370,16 +373,18 @@ async def test_expense_summary_groups_by_category(
         settlement_id=uuid.UUID(s["id"]),
         organization_id=uuid.UUID(org["id"]),
         amount=Decimal("2000000"),
-        budget_category="행사비",
+        budget_category="다과/간식",
+        group_name="중간고사 간식행사",
         merchant="행사2",
     )
-    # 홍보비: 1건, 500,000
+    # 개강총회: 1건, 500,000
     await _seed_evidence(
         db_sessionmaker,
         settlement_id=uuid.UUID(s["id"]),
         organization_id=uuid.UUID(org["id"]),
         amount=Decimal("500000"),
-        budget_category="홍보비",
+        budget_category="식비",
+        group_name="개강총회",
         merchant="홍보1",
     )
 
@@ -391,32 +396,35 @@ async def test_expense_summary_groups_by_category(
     body = resp.json()
     assert body["total_count"] == 3
     assert Decimal(body["total_amount"]) == Decimal("3500000")
-    # Sorted by amount desc.
-    assert [item["category"] for item in body["by_category"]] == ["행사비", "홍보비"]
+    # Sorted by amount desc; buckets are 구분 values (NOT budget categories).
+    assert [item["category"] for item in body["by_category"]] == [
+        "중간고사 간식행사",
+        "개강총회",
+    ]
     assert body["by_category"][0]["count"] == 2
     assert Decimal(body["by_category"][0]["amount"]) == Decimal("3000000")
     assert body["by_category"][1]["count"] == 1
     assert Decimal(body["by_category"][1]["amount"]) == Decimal("500000")
 
 
-async def test_expense_summary_null_category_sinks_to_bottom(
+async def test_expense_summary_null_구분_sinks_to_bottom(
     client: AsyncClient, db_sessionmaker: async_sessionmaker
 ) -> None:
-    """Unclassified evidences (null budget_category) appear last regardless of
-    their amount — keeps the FE list readable while categories are being
-    filled in."""
+    """Evidences without a 구분 appear last regardless of their amount —
+    keeps the FE list readable while groups are being filled in."""
     await signup(client, email="es_null@konkuk.ac.kr")
     headers = await auth_headers(client, "es_null@konkuk.ac.kr")
     org = await create_org_as_admin(client, headers)
     s = await _create_settlement(client, headers, org_id=org["id"])
 
-    # Unclassified evidence has the LARGEST amount, but should still go last.
+    # Ungrouped evidence has the LARGEST amount, but should still go last.
     await _seed_evidence(
         db_sessionmaker,
         settlement_id=uuid.UUID(s["id"]),
         organization_id=uuid.UUID(org["id"]),
         amount=Decimal("9000000"),
-        budget_category=None,
+        budget_category="기타",
+        group_name=None,
         merchant="미분류큰건",
     )
     await _seed_evidence(
@@ -424,7 +432,8 @@ async def test_expense_summary_null_category_sinks_to_bottom(
         settlement_id=uuid.UUID(s["id"]),
         organization_id=uuid.UUID(org["id"]),
         amount=Decimal("100000"),
-        budget_category="사무용품비",
+        budget_category="사무용품/비품",
+        group_name="비품 구입",
         merchant="볼펜",
     )
 
@@ -433,8 +442,8 @@ async def test_expense_summary_null_category_sinks_to_bottom(
         headers=headers,
     )
     body = resp.json()
-    categories = [item["category"] for item in body["by_category"]]
-    assert categories == ["사무용품비", None]
+    groups = [item["category"] for item in body["by_category"]]
+    assert groups == ["비품 구입", None]
 
 
 async def test_expense_summary_uses_abs_for_amount(

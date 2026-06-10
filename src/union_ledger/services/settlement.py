@@ -136,20 +136,26 @@ async def get_settlement_expense_summary(
     *,
     settlement: Settlement,
 ) -> SettlementExpenseSummary:
-    """Aggregate the settlement's evidences into total + per-category rollup.
+    """Aggregate the settlement's evidences into total + per-구분 rollup.
+
+    Buckets by ``group_name`` (구분 — the human-entered event/purpose, e.g.
+    "중간고사 간식행사"), which is what every breakdown UI shows. The wire
+    field names (``by_category`` / ``category``) are kept for compatibility,
+    but their values are 구분 labels — ``budget_category`` stays background
+    data (AI classification) and is no longer surfaced in summaries.
 
     A single GROUP BY query — also covers the "no evidences yet" case (returns
     empty list and zero totals). Uses ``evidence_signed_amount()`` so refunds
-    (is_refund) subtract and the per-category / total figures are net spend.
+    (is_refund) subtract and the per-구분 / total figures are net spend.
     """
     stmt = (
         select(
-            Evidence.budget_category,
+            Evidence.group_name,
             func.count(Evidence.id),
             func.coalesce(func.sum(evidence_signed_amount()), 0),
         )
         .where(Evidence.settlement_id == settlement.id)
-        .group_by(Evidence.budget_category)
+        .group_by(Evidence.group_name)
     )
     result = await session.execute(stmt)
 
