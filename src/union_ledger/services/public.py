@@ -29,6 +29,7 @@ from union_ledger.models.entities import (
     OrganizationMembership,
     Settlement,
     SettlementArtifact,
+    User,
     evidence_signed_amount,
 )
 from union_ledger.models.enums import ArtifactStatus, SettlementStatus
@@ -74,10 +75,10 @@ def is_settlement_public(settlement: Settlement) -> bool:
     )
 
 
-async def _user_visible_colleges(
+async def user_visible_colleges(
     session: AsyncSession, *, user_id: uuid.UUID
 ) -> set[str]:
-    """Every college name the user has any membership in."""
+    """Every college name the user may browse published settlements for."""
     result = await session.scalars(
         select(Organization.college_name)
         .join(
@@ -87,7 +88,13 @@ async def _user_visible_colleges(
         .where(OrganizationMembership.user_id == user_id)
         .distinct()
     )
-    return {name for name in result.all() if name}
+    colleges = {name for name in result.all() if name}
+    # Plain students hold no org membership; fall back to the college on their
+    # account so they can still browse their college's published settlements.
+    user = await session.get(User, user_id)
+    if user is not None and user.college_name:
+        colleges.add(user.college_name)
+    return colleges
 
 
 async def _settlement_aggregates(
@@ -118,7 +125,7 @@ async def list_public_settlements(
     *,
     user_id: uuid.UUID,
 ) -> list[PublicSummary]:
-    colleges = await _user_visible_colleges(session, user_id=user_id)
+    colleges = await user_visible_colleges(session, user_id=user_id)
     if not colleges:
         return []
 
@@ -174,7 +181,7 @@ async def get_public_settlement_detail(
     if org is None:
         raise SettlementNotPublic("조직 정보를 찾을 수 없습니다.")
 
-    colleges = await _user_visible_colleges(session, user_id=user_id)
+    colleges = await user_visible_colleges(session, user_id=user_id)
     if org.college_name not in colleges:
         raise SettlementNotPublic("열람 권한이 없는 결산안입니다.")
 
@@ -212,7 +219,7 @@ async def list_public_items(
     if not is_settlement_public(settlement):
         raise SettlementNotPublic("아직 공개되지 않은 결산안입니다.")
     org = await session.get(Organization, settlement.organization_id)
-    colleges = await _user_visible_colleges(session, user_id=user_id)
+    colleges = await user_visible_colleges(session, user_id=user_id)
     if org is None or org.college_name not in colleges:
         raise SettlementNotPublic("열람 권한이 없는 결산안입니다.")
 
@@ -240,7 +247,7 @@ async def get_public_evidence(
     if settlement is None or not is_settlement_public(settlement):
         raise EvidenceNotPublic("이 증빙은 공개된 결산안에 속하지 않습니다.")
     org = await session.get(Organization, settlement.organization_id)
-    colleges = await _user_visible_colleges(session, user_id=user_id)
+    colleges = await user_visible_colleges(session, user_id=user_id)
     if org is None or org.college_name not in colleges:
         raise EvidenceNotPublic("열람 권한이 없는 증빙입니다.")
     return evidence
@@ -261,6 +268,6 @@ async def assert_artifact_public(
     if artifact.status != ArtifactStatus.COMPLETED:
         raise ArtifactNotPublic("산출물이 아직 준비되지 않았습니다.")
     org = await session.get(Organization, settlement.organization_id)
-    colleges = await _user_visible_colleges(session, user_id=user_id)
+    colleges = await user_visible_colleges(session, user_id=user_id)
     if org is None or org.college_name not in colleges:
         raise ArtifactNotPublic("열람 권한이 없는 산출물입니다.")

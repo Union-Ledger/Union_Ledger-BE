@@ -152,6 +152,39 @@ async def test_published_settlement_appears_in_list(
     assert settlement["title"] in titles
 
 
+async def test_plain_student_sees_published_settlement_in_same_college(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, tmp_path, monkeypatch
+) -> None:
+    """Students without org membership browse by account college_name."""
+    from union_ledger.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "storage_root", tmp_path)
+
+    college = "공과대학"
+    department = "컴퓨터공학부"
+    _, settlement, _, _ = await _publish_settlement_with_evidence(
+        client,
+        db_sessionmaker,
+        storage_root=tmp_path,
+        college=college,
+        department=department,
+        title="학우에게 보여야 하는 결산",
+    )
+
+    await signup(
+        client,
+        email="plain.student@konkuk.ac.kr",
+        college_name=college,
+        department_name=department,
+    )
+    student_headers = await auth_headers(client, "plain.student@konkuk.ac.kr")
+
+    resp = await client.get("/api/v1/public/settlements", headers=student_headers)
+    assert resp.status_code == 200, resp.text
+    titles = {row["title"] for row in resp.json()}
+    assert settlement["title"] in titles
+
+
 async def test_unpublished_settlement_hidden_from_list(client: AsyncClient) -> None:
     """Settlement that's been approved but not yet published must NOT appear."""
     await signup(client, email="pv_h_admin@konkuk.ac.kr")

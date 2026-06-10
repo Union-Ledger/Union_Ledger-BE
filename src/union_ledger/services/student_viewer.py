@@ -24,7 +24,7 @@ from union_ledger.models.entities import (
 )
 from union_ledger.models.enums import SettlementStatus
 from union_ledger.schemas.settlement import ALLOWED_SEMESTERS
-from union_ledger.services.public import is_settlement_public
+from union_ledger.services.public import is_settlement_public, user_visible_colleges
 
 _SEMESTER_ORDER = {"1": 0, "2": 1, "summer": 2, "winter": 3}
 
@@ -151,27 +151,6 @@ def build_progress_steps(settlement: Settlement) -> list[dict[str, object]]:
             else None,
         },
     ]
-
-
-async def user_visible_colleges(
-    session: AsyncSession, *, user_id: uuid.UUID
-) -> set[str]:
-    result = await session.scalars(
-        select(Organization.college_name)
-        .join(
-            OrganizationMembership,
-            OrganizationMembership.organization_id == Organization.id,
-        )
-        .where(OrganizationMembership.user_id == user_id)
-        .distinct()
-    )
-    colleges = {name for name in result.all() if name}
-    # A plain student holds no membership; fall back to the college recorded on
-    # their account so they can still browse their college's published settlements.
-    user = await session.get(User, user_id)
-    if user is not None and user.college_name:
-        colleges.add(user.college_name)
-    return colleges
 
 
 async def resolve_org_by_user_identity(
