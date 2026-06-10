@@ -164,14 +164,13 @@ async def test_upload_template_rejects_non_object_mapping(client: AsyncClient) -
 
 
 async def test_list_templates_default_active_only(client: AsyncClient) -> None:
+    """Uploading auto-deactivates older templates (single active per org), so
+    the default listing shows only the newest upload."""
     await signup(client, email="t_list@konkuk.ac.kr")
     headers = await auth_headers(client, "t_list@konkuk.ac.kr")
     org = await create_org_as_admin(client, headers)
-    active = await _upload_template(client, headers, org_id=org["id"], name="활성")
-    inactive = await _upload_template(client, headers, org_id=org["id"], name="비활성")
-
-    # Deactivate the second one.
-    await client.delete(f"/api/v1/templates/{inactive['id']}", headers=headers)
+    older = await _upload_template(client, headers, org_id=org["id"], name="이전 양식")
+    newest = await _upload_template(client, headers, org_id=org["id"], name="현재 양식")
 
     listing = await client.get(
         f"/api/v1/organizations/{org['id']}/templates",
@@ -179,8 +178,17 @@ async def test_list_templates_default_active_only(client: AsyncClient) -> None:
     )
     assert listing.status_code == 200
     ids = [t["id"] for t in listing.json()]
-    assert active["id"] in ids
-    assert inactive["id"] not in ids
+    assert newest["id"] in ids
+    assert older["id"] not in ids
+
+    # Soft-deleting the active one leaves no active templates.
+    await client.delete(f"/api/v1/templates/{newest['id']}", headers=headers)
+    listing = await client.get(
+        f"/api/v1/organizations/{org['id']}/templates",
+        headers=headers,
+    )
+    assert listing.status_code == 200
+    assert listing.json() == []
 
 
 async def test_list_templates_include_inactive(client: AsyncClient) -> None:

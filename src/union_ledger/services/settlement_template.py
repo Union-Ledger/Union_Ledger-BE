@@ -122,11 +122,16 @@ async def effective_mapping_schema(
     if not detected:
         return template.mapping_schema or {}
 
-    if template.mapping_schema != detected:
-        template.mapping_schema = detected
+    # Detection augments — it must never discard cells the treasurer mapped
+    # explicitly. Manual entries win on collision; detected supplies the rest
+    # (incl. _layout/_ledger metadata, which manual mappings never contain).
+    merged = {**detected, **(template.mapping_schema or {})}
+
+    if template.mapping_schema != merged:
+        template.mapping_schema = merged
         await session.commit()
         await session.refresh(template)
-    return detected
+    return merged
 
 
 async def get_active_org_template(
