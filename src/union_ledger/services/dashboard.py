@@ -34,6 +34,7 @@ from union_ledger.models.entities import (
     User,
     evidence_signed_amount,
 )
+from union_ledger.services.audit_workflow import auditor_visible_org_ids
 from union_ledger.models.enums import MatchStatus, RoleType, SettlementStatus
 
 # Roles that get the treasurer dashboard. Admins manage the org and need
@@ -321,9 +322,7 @@ async def get_auditor_dashboard(
     user_id: uuid.UUID,
     pending_limit: int = 10,
 ) -> AuditorSummary:
-    org_ids = await _user_org_ids(
-        session, user_id=user_id, roles=(RoleType.AUDITOR,)
-    )
+    org_ids = await auditor_visible_org_ids(session, user_id=user_id)
     if not org_ids:
         return AuditorSummary(
             organization_count=0,

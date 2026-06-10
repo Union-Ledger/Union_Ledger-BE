@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from union_ledger.models.entities import (
@@ -24,7 +24,7 @@ from union_ledger.models.entities import (
 )
 from union_ledger.models.enums import SettlementStatus
 from union_ledger.schemas.settlement import ALLOWED_SEMESTERS
-from union_ledger.services.public import is_settlement_public
+from union_ledger.services.public import is_settlement_public, user_visible_colleges
 
 _SEMESTER_ORDER = {"1": 0, "2": 1, "summer": 2, "winter": 3}
 
@@ -153,27 +153,6 @@ def build_progress_steps(settlement: Settlement) -> list[dict[str, object]]:
     ]
 
 
-async def user_visible_colleges(
-    session: AsyncSession, *, user_id: uuid.UUID
-) -> set[str]:
-    result = await session.scalars(
-        select(Organization.college_name)
-        .join(
-            OrganizationMembership,
-            OrganizationMembership.organization_id == Organization.id,
-        )
-        .where(OrganizationMembership.user_id == user_id)
-        .distinct()
-    )
-    colleges = {name for name in result.all() if name}
-    # A plain student holds no membership; fall back to the college recorded on
-    # their account so they can still browse their college's published settlements.
-    user = await session.get(User, user_id)
-    if user is not None and user.college_name:
-        colleges.add(user.college_name)
-    return colleges
-
-
 async def resolve_org_by_user_identity(
     session: AsyncSession, *, user_id: uuid.UUID
 ) -> Organization | None:
@@ -204,7 +183,14 @@ async def settlement_aggregates(
             func.coalesce(func.sum(evidence_signed_amount()), 0),
             func.count(Evidence.id),
         )
-        .where(Evidence.settlement_id.in_(settlement_ids))
+        .join(Settlement, Settlement.id == Evidence.settlement_id)
+        .where(
+            Evidence.settlement_id.in_(settlement_ids),
+            or_(
+                Settlement.published_at.is_(None),
+                Evidence.created_at <= Settlement.published_at,
+            ),
+        )
         .group_by(Evidence.settlement_id)
     )
     return {

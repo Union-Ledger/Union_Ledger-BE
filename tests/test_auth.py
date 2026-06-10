@@ -121,11 +121,8 @@ async def test_signup_duplicate_email_conflicts(client: AsyncClient) -> None:
         "/api/v1/auth/send-verification-code",
         json={"email": "dup@konkuk.ac.kr"},
     )
-    code = send.json()["debug_code"]
-    await client.post(
-        "/api/v1/auth/verify-email",
-        json={"email": "dup@konkuk.ac.kr", "code": code},
-    )
+    assert send.status_code == 409, send.text
+
     resp = await client.post(
         "/api/v1/auth/signup",
         json={
@@ -138,6 +135,23 @@ async def test_signup_duplicate_email_conflicts(client: AsyncClient) -> None:
         },
     )
     assert resp.status_code == 409, resp.text
+
+
+async def test_verify_email_rejects_existing_account(client: AsyncClient) -> None:
+    await signup(client, email="already@konkuk.ac.kr")
+
+    send = await client.post(
+        "/api/v1/auth/send-verification-code",
+        json={"email": "fresh@konkuk.ac.kr"},
+    )
+    code = send.json()["debug_code"]
+
+    # Swap to an existing email after obtaining a code for a different address.
+    verify = await client.post(
+        "/api/v1/auth/verify-email",
+        json={"email": "already@konkuk.ac.kr", "code": code},
+    )
+    assert verify.status_code == 409, verify.text
 
 
 async def test_login_wrong_password(client: AsyncClient) -> None:
@@ -294,6 +308,26 @@ async def test_reset_password_mismatch_is_422(client: AsyncClient) -> None:
         },
     )
     assert resp.status_code == 422, resp.text
+
+
+async def test_reset_password_rejects_same_as_current(client: AsyncClient) -> None:
+    await signup(client, email="reset.same@konkuk.ac.kr")
+    forgot = await client.post(
+        "/api/v1/auth/password/forgot",
+        json={"email": "reset.same@konkuk.ac.kr"},
+    )
+    code = forgot.json()["debug_code"]
+    resp = await client.post(
+        "/api/v1/auth/password/reset",
+        json={
+            "email": "reset.same@konkuk.ac.kr",
+            "code": code,
+            "new_password": DEFAULT_PASSWORD,
+            "new_password_confirm": DEFAULT_PASSWORD,
+        },
+    )
+    assert resp.status_code == 400, resp.text
+    assert "기존 비밀번호" in resp.json()["detail"]
 
 
 async def test_me_reflects_memberships(client: AsyncClient) -> None:

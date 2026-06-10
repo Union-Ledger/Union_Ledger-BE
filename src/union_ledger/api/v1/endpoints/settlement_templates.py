@@ -93,10 +93,13 @@ async def upload_template(
     file: Annotated[UploadFile, File()],
     mapping_schema: Annotated[
         str | None,
-        Form(description="JSON object 문자열 (cell → spec field 매핑). 비워두면 빈 dict."),
+        Form(description="JSON object (cell → spec field). 비우면 양식 라벨에서 자동 추론."),
     ] = None,
 ) -> SettlementTemplateResponse:
     parsed_mapping = _parse_mapping_schema(mapping_schema)
+
+    file_bytes = await file.read()
+    await file.seek(0)
 
     try:
         stored = await save_template_file(
@@ -121,6 +124,7 @@ async def upload_template(
         name=name,
         stored_file=stored,
         mapping_schema=parsed_mapping,
+        file_bytes=file_bytes,
     )
     return SettlementTemplateResponse.model_validate(template)
 

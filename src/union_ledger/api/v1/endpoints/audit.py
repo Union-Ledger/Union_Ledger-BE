@@ -23,6 +23,7 @@ from union_ledger.api.deps.auth import (
     get_current_user,
     require_membership_for_org,
 )
+from union_ledger.core.config import get_settings
 from union_ledger.db.session import get_db_session
 from union_ledger.models.entities import Settlement
 from union_ledger.models.enums import RoleType
@@ -33,10 +34,15 @@ from union_ledger.schemas.audit import (
 )
 from union_ledger.schemas.auth_response import AuthUser
 from union_ledger.schemas.settlement import SettlementResponse
+from union_ledger.services.artifact import generate_settlement_artifacts
 from union_ledger.services.audit_comment import (
     EvidenceNotInSettlement,
     create_comment,
     list_comments,
+)
+from union_ledger.services.audit_workflow import (
+    AuditorAccessDenied,
+    require_auditor_for_settlement,
 )
 from union_ledger.services.notification import (
     notify_audit_approved,
@@ -133,6 +139,11 @@ async def submit(
         settlement = await submit_settlement(session, settlement=settlement)
     except IllegalStatusTransition as exc:
         raise _bad_transition(exc) from exc
+    await generate_settlement_artifacts(
+        session,
+        settings=get_settings(),
+        settlement=settlement,
+    )
     await notify_settlement_submitted(
         session, settlement=settlement, actor_user_id=current_user.id
     )
@@ -161,6 +172,11 @@ async def resubmit(
         settlement = await resubmit_settlement(session, settlement=settlement)
     except IllegalStatusTransition as exc:
         raise _bad_transition(exc) from exc
+    await generate_settlement_artifacts(
+        session,
+        settings=get_settings(),
+        settlement=settlement,
+    )
     await _maybe_attach_decision_comment(
         session,
         settlement=settlement,
@@ -188,12 +204,15 @@ async def approve(
     session: DbSession,
 ) -> SettlementResponse:
     settlement = await _load_settlement_or_404(session, settlement_id)
-    membership = await require_membership_for_org(
-        session,
-        user_id=current_user.id,
-        organization_id=settlement.organization_id,
-        allowed_roles={RoleType.AUDITOR},
-    )
+    try:
+        membership = await require_auditor_for_settlement(
+            session, user_id=current_user.id, settlement=settlement
+        )
+    except AuditorAccessDenied as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
     try:
         settlement = await approve_settlement(session, settlement=settlement)
     except IllegalStatusTransition as exc:
@@ -222,12 +241,15 @@ async def reject(
     session: DbSession,
 ) -> SettlementResponse:
     settlement = await _load_settlement_or_404(session, settlement_id)
-    membership = await require_membership_for_org(
-        session,
-        user_id=current_user.id,
-        organization_id=settlement.organization_id,
-        allowed_roles={RoleType.AUDITOR},
-    )
+    try:
+        membership = await require_auditor_for_settlement(
+            session, user_id=current_user.id, settlement=settlement
+        )
+    except AuditorAccessDenied as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
     try:
         settlement = await reject_settlement(session, settlement=settlement)
     except IllegalStatusTransition as exc:

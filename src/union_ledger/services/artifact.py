@@ -38,7 +38,7 @@ from typing import Any
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string
 from openpyxl.utils.cell import coordinate_from_string
-from openpyxl.utils.exceptions import InvalidFileException
+from openpyxl.utils.exceptions import CellCoordinatesException, InvalidFileException
 from PIL import Image, UnidentifiedImageError
 from pypdf import PdfReader, PdfWriter
 from pypdf.errors import PdfReadError
@@ -60,6 +60,16 @@ from union_ledger.models.enums import (
     ArtifactStatus,
     ArtifactType,
     MatchStatus,
+)
+from union_ledger.services.template_ledger import (
+    LAYOUT_AUDIT_LEDGER,
+    fill_audit_ledger,
+    format_korean_header_date,
+)
+from union_ledger.services.settlement_template import (
+    TemplateNotFound as SettlementTemplateNotFound,
+    effective_mapping_schema,
+    resolve_template_for_generation,
 )
 
 # Image suffixes we know PIL can convert to PDF without further work.
@@ -230,7 +240,7 @@ def _is_valid_cell_address(addr: str) -> bool:
         col, row = coordinate_from_string(addr)
         column_index_from_string(col)
         return row >= 1
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, CellCoordinatesException):
         return False
 
 
@@ -326,6 +336,7 @@ def render_settlement_excel(
     template_path: Path,
     mapping_schema: dict[str, Any],
     spec_fields: dict[str, Any],
+    evidences: Sequence[Evidence] | None = None,
 ) -> bytes:
     """Open template, write each `mapping[cell] = spec_field` value, return bytes."""
     wb = _load_template_workbook(template_path)
@@ -335,18 +346,32 @@ def render_settlement_excel(
         wb.close()
         raise ArtifactError("템플릿에 활성 시트가 없습니다.")
 
+    layout = mapping_schema.get("_layout")
+    ledger_config = mapping_schema.get("_ledger")
+    evidence_rows = list(evidences or [])
+
     for cell_addr, field_name in mapping_schema.items():
         if not isinstance(cell_addr, str) or not _is_valid_cell_address(cell_addr):
-            # Skip silently — a malformed entry shouldn't take down the whole
-            # generation. The template owner can fix the mapping afterwards.
             continue
         if not isinstance(field_name, str) or field_name not in _SUPPORTED_SPEC_FIELDS:
             continue
         value = spec_fields.get(field_name)
+        if layout == LAYOUT_AUDIT_LEDGER and field_name == "generated_at":
+            value = format_korean_header_date(value)
         if isinstance(value, Decimal):
-            # openpyxl stores Decimal as Python int/float; cast for cleaner Excel output.
             value = float(value)
         sheet[cell_addr] = value
+
+    if (
+        layout == LAYOUT_AUDIT_LEDGER
+        and isinstance(ledger_config, dict)
+        and evidence_rows
+    ):
+        fill_audit_ledger(
+            sheet,
+            evidences=list(evidence_rows),
+            ledger_config=ledger_config,
+        )
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -465,16 +490,20 @@ async def generate_settlement_artifacts(
     excel_row.status = ArtifactStatus.PROCESSING
     await session.commit()
     try:
-        if settlement.template_id is None:
-            raise TemplateMissing("결산안에 연결된 템플릿이 없습니다.")
-        template = await session.get(SettlementTemplate, settlement.template_id)
-        if template is None:
-            raise TemplateMissing("템플릿이 삭제되었습니다.")
+        try:
+            template = await resolve_template_for_generation(
+                session, settlement=settlement
+            )
+        except SettlementTemplateNotFound as exc:
+            raise TemplateMissing(str(exc)) from exc
+
+        mapping_schema = await effective_mapping_schema(session, template=template)
 
         excel_bytes = render_settlement_excel(
             template_path=Path(template.file_path),
-            mapping_schema=template.mapping_schema or {},
+            mapping_schema=mapping_schema,
             spec_fields=spec_fields,
+            evidences=list(snapshot.evidences),
         )
         excel_path = _write_bytes(out_dir, ".xlsx", excel_bytes)
         excel_row.file_path = str(excel_path)

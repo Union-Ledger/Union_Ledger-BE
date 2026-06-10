@@ -16,6 +16,8 @@ Plus:
 
 from __future__ import annotations
 
+import io
+
 from httpx import AsyncClient
 
 from conftest import (
@@ -79,6 +81,106 @@ async def test_submit_draft_settlement(client: AsyncClient) -> None:
     assert body["status"] == "submitted"
     assert body["submitted_at"] is not None
     assert body["audited_at"] is None
+
+
+async def test_submit_generates_artifacts(
+    client: AsyncClient,
+    db_sessionmaker,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import json
+    import uuid
+    from datetime import date
+    from decimal import Decimal
+    from pathlib import Path
+
+    from union_ledger.core.config import get_settings
+    from union_ledger.models.entities import Evidence
+    from union_ledger.models.enums import EvidenceStatus, EvidenceType
+
+    fixture = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "settlement_templates"
+        / "audit_ledger_sample.xlsx"
+    )
+    if not fixture.is_file():
+        return
+
+    monkeypatch.setattr(get_settings(), "storage_root", tmp_path)
+
+    await signup(client, email="sub_art@konkuk.ac.kr")
+    admin_headers = await auth_headers(client, "sub_art@konkuk.ac.kr")
+    org = await create_org_as_admin(client, admin_headers)
+
+    files = {
+        "file": (
+            "audit_ledger_sample.xlsx",
+            io.BytesIO(fixture.read_bytes()),
+            "application/vnd.ms-excel",
+        )
+    }
+    template_resp = await client.post(
+        f"/api/v1/organizations/{org['id']}/templates",
+        headers=admin_headers,
+        files=files,
+        data={"name": "공과대", "mapping_schema": json.dumps({"B1": "title"})},
+    )
+    assert template_resp.status_code == 201, template_resp.text
+    template_id = template_resp.json()["id"]
+
+    settlement_resp = await client.post(
+        f"/api/v1/organizations/{org['id']}/settlements",
+        headers=admin_headers,
+        json={
+            "title": "2026-1학기 결산안",
+            "academic_year": 2026,
+            "semester": "1",
+            "template_id": template_id,
+        },
+    )
+    assert settlement_resp.status_code == 201, settlement_resp.text
+    settlement = settlement_resp.json()
+
+    img_dir = tmp_path / "evidences" / settlement["id"]
+    img_dir.mkdir(parents=True, exist_ok=True)
+    img_path = img_dir / "ev.png"
+    img_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+    async with db_sessionmaker() as session:
+        session.add(
+            Evidence(
+                settlement_id=uuid.UUID(settlement["id"]),
+                organization_id=uuid.UUID(org["id"]),
+                evidence_type=EvidenceType.PHYSICAL_RECEIPT,
+                status=EvidenceStatus.CONFIRMED,
+                source_file_name="ev.png",
+                source_file_path=str(img_path),
+                extracted_payload={},
+                evidence_date=date(2025, 12, 23),
+                merchant_name="테스트상점",
+                amount=Decimal("85000"),
+                budget_category="비품",
+            )
+        )
+        await session.commit()
+
+    submit_resp = await client.post(
+        f"/api/v1/settlements/{settlement['id']}/submit",
+        headers=admin_headers,
+    )
+    assert submit_resp.status_code == 200, submit_resp.text
+
+    artifacts_resp = await client.get(
+        f"/api/v1/settlements/{settlement['id']}/artifacts",
+        headers=admin_headers,
+    )
+    assert artifacts_resp.status_code == 200, artifacts_resp.text
+    artifacts = artifacts_resp.json()
+    assert len(artifacts) == 2
+    excel = next(a for a in artifacts if a["artifact_type"] == "settlement_excel")
+    assert excel["status"] == "completed"
+    assert excel["file_path"]
 
 
 async def test_submit_rejects_non_draft(client: AsyncClient) -> None:

@@ -1,10 +1,9 @@
 """Auditor-side workflow services (spec §3).
 
 Three responsibilities:
-  - `list_auditor_worklist`: every settlement in any org where the caller
-    holds AUDITOR. We aggregate evidence/transaction/comment counts and a
-    reconciliation summary in-process; counts are small enough that
-    chasing N+1 is not worth a CTE for the MVP.
+  - `list_auditor_worklist`: settlements in the caller's auditor college(s)
+    (spec §3: 소속 단과대 결산안 목록). An auditor invited to any org in a
+    college can review every department in that college.
   - `get_review_bundle`: one-shot read for the comparison-view screen.
   - `update_comment`: comment edit, gated to the original author.
 """
@@ -57,6 +56,10 @@ class CommentNotEditableByUser(AuditWorkflowError):
     """Raised when a non-author tries to edit a comment."""
 
 
+class AuditorAccessDenied(AuditWorkflowError):
+    """Caller is not an auditor for the settlement's college."""
+
+
 @dataclass(slots=True)
 class WorklistEntry:
     settlement: Settlement
@@ -77,6 +80,79 @@ class ReviewBundle:
     comments: Sequence[AuditComment]
 
 
+# --- Auditor college scope ------------------------------------------------
+
+
+async def auditor_visible_colleges(
+    session: AsyncSession, *, user_id: uuid.UUID
+) -> set[str]:
+    """Colleges where the user holds an AUDITOR membership."""
+    result = await session.scalars(
+        select(Organization.college_name)
+        .join(
+            OrganizationMembership,
+            OrganizationMembership.organization_id == Organization.id,
+        )
+        .where(
+            OrganizationMembership.user_id == user_id,
+            OrganizationMembership.role == RoleType.AUDITOR,
+        )
+        .distinct()
+    )
+    return {name for name in result.all() if name}
+
+
+async def auditor_visible_org_ids(
+    session: AsyncSession, *, user_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """Every org in a college where the user is an auditor."""
+    colleges = await auditor_visible_colleges(session, user_id=user_id)
+    if not colleges:
+        return []
+    result = await session.scalars(
+        select(Organization.id).where(Organization.college_name.in_(colleges))
+    )
+    return list(result.all())
+
+
+async def require_auditor_for_settlement(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    settlement: Settlement,
+) -> OrganizationMembership:
+    """Ensure the user may audit this settlement (same college scope).
+
+    Returns one of the caller's auditor memberships in that college so
+    approve/reject comments can record an author_membership_id.
+    """
+    org = await session.get(Organization, settlement.organization_id)
+    if org is None:
+        raise AuditorAccessDenied("조직 정보를 찾을 수 없습니다.")
+
+    colleges = await auditor_visible_colleges(session, user_id=user_id)
+    if org.college_name not in colleges:
+        raise AuditorAccessDenied("감사 권한이 없는 결산안입니다.")
+
+    membership = await session.scalar(
+        select(OrganizationMembership)
+        .join(
+            Organization,
+            Organization.id == OrganizationMembership.organization_id,
+        )
+        .where(
+            OrganizationMembership.user_id == user_id,
+            OrganizationMembership.role == RoleType.AUDITOR,
+            Organization.college_name == org.college_name,
+        )
+        .order_by(OrganizationMembership.created_at.asc())
+        .limit(1)
+    )
+    if membership is None:
+        raise AuditorAccessDenied("감사 권한이 없는 결산안입니다.")
+    return membership
+
+
 # --- Worklist -------------------------------------------------------------
 
 
@@ -86,7 +162,7 @@ async def list_auditor_worklist(
     user_id: uuid.UUID,
     statuses: Sequence[SettlementStatus] | None = None,
 ) -> list[WorklistEntry]:
-    """Settlements visible to a user in any org where they hold AUDITOR.
+    """Settlements visible to a college-scoped auditor.
 
     `statuses=None` → all auditor-visible statuses (everything except DRAFT).
     Pass `statuses=[SUBMITTED, RESUBMITTED]` for "needs my action".
@@ -97,16 +173,7 @@ async def list_auditor_worklist(
     if not target_statuses:
         return []
 
-    # Orgs where the caller is an auditor.
-    auditor_org_ids = await session.scalars(
-        select(OrganizationMembership.organization_id)
-        .where(
-            OrganizationMembership.user_id == user_id,
-            OrganizationMembership.role == RoleType.AUDITOR,
-        )
-        .distinct()
-    )
-    org_ids = list(auditor_org_ids.all())
+    org_ids = await auditor_visible_org_ids(session, user_id=user_id)
     if not org_ids:
         return []
 

@@ -55,6 +55,17 @@ def _validate_university_email(email: str) -> str:
     return normalized
 
 
+async def _ensure_email_available_for_signup(
+    session: AsyncSession, email: str
+) -> None:
+    existing_user = await session.scalar(select(User).where(User.email == email))
+    if existing_user is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 가입된 이메일입니다.",
+        )
+
+
 @router.post(
     "/send-verification-code",
     response_model=SendVerificationCodeResponse,
@@ -65,6 +76,7 @@ async def send_verification_code(
     session: AsyncSession = Depends(get_db_session),
 ) -> SendVerificationCodeResponse:
     email = _validate_university_email(payload.email)
+    await _ensure_email_available_for_signup(session, email)
     code, expires_in = await issue_code(session, email)
 
     try:
@@ -94,6 +106,7 @@ async def verify_email(
     session: AsyncSession = Depends(get_db_session),
 ) -> VerifyEmailCodeResponse:
     email = _validate_university_email(payload.email)
+    await _ensure_email_available_for_signup(session, email)
     verified = await verify_code(session, email, payload.code.strip())
     if not verified:
         raise HTTPException(
@@ -166,6 +179,12 @@ async def reset_password(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="가입된 계정을 찾을 수 없습니다.",
+        )
+
+    if user.password_hash and verify_password(payload.new_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="기존 비밀번호와 동일한 비밀번호는 사용할 수 없습니다.",
         )
 
     user.password_hash = hash_password(payload.new_password)

@@ -152,6 +152,39 @@ async def test_published_settlement_appears_in_list(
     assert settlement["title"] in titles
 
 
+async def test_plain_student_sees_published_settlement_in_same_college(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, tmp_path, monkeypatch
+) -> None:
+    """Students without org membership browse by account college_name."""
+    from union_ledger.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "storage_root", tmp_path)
+
+    college = "공과대학"
+    department = "컴퓨터공학부"
+    _, settlement, _, _ = await _publish_settlement_with_evidence(
+        client,
+        db_sessionmaker,
+        storage_root=tmp_path,
+        college=college,
+        department=department,
+        title="학우에게 보여야 하는 결산",
+    )
+
+    await signup(
+        client,
+        email="plain.student@konkuk.ac.kr",
+        college_name=college,
+        department_name=department,
+    )
+    student_headers = await auth_headers(client, "plain.student@konkuk.ac.kr")
+
+    resp = await client.get("/api/v1/public/settlements", headers=student_headers)
+    assert resp.status_code == 200, resp.text
+    titles = {row["title"] for row in resp.json()}
+    assert settlement["title"] in titles
+
+
 async def test_unpublished_settlement_hidden_from_list(client: AsyncClient) -> None:
     """Settlement that's been approved but not yet published must NOT appear."""
     await signup(client, email="pv_h_admin@konkuk.ac.kr")
@@ -270,6 +303,61 @@ async def test_items_returns_evidence_summary(
     assert items[0]["evidence_id"] == ev["id"]
     assert items[0]["merchant_name"] == "공개가게"
     assert items[0]["has_evidence_file"] is True
+
+
+async def test_post_publish_evidence_hidden_from_public_view(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, tmp_path, monkeypatch
+) -> None:
+    from union_ledger.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "storage_root", tmp_path)
+
+    org, settlement, ev, admin_headers = await _publish_settlement_with_evidence(
+        client, db_sessionmaker, storage_root=tmp_path
+    )
+    sid = uuid.UUID(settlement["id"])
+    late_path = tmp_path / "evidences" / str(sid) / "late.png"
+    late_path.parent.mkdir(parents=True, exist_ok=True)
+    late_path.write_bytes(_png_bytes())
+
+    async with db_sessionmaker() as session:
+        late = Evidence(
+            settlement_id=sid,
+            organization_id=uuid.UUID(org["id"]),
+            evidence_type=EvidenceType.PHYSICAL_RECEIPT,
+            status=EvidenceStatus.CONFIRMED,
+            source_file_name="late.png",
+            source_file_path=str(late_path),
+            extracted_payload={},
+            evidence_date=date(2026, 5, 1),
+            merchant_name="승인 후 추가",
+            amount=Decimal("9900"),
+        )
+        session.add(late)
+        await session.commit()
+        await session.refresh(late)
+        late_id = late.id
+
+    items_resp = await client.get(
+        f"/api/v1/public/settlements/{settlement['id']}/items",
+        headers=admin_headers,
+    )
+    assert items_resp.status_code == 200, items_resp.text
+    items = items_resp.json()
+    assert len(items) == 1
+    assert items[0]["evidence_id"] == ev["id"]
+
+    detail_resp = await client.get(
+        f"/api/v1/public/settlements/{settlement['id']}",
+        headers=admin_headers,
+    )
+    assert detail_resp.status_code == 200, detail_resp.text
+    assert detail_resp.json()["item_count"] == 1
+
+    late_meta = await client.get(
+        f"/api/v1/public/evidences/{late_id}", headers=admin_headers
+    )
+    assert late_meta.status_code == 404, late_meta.text
 
 
 async def test_get_public_evidence_metadata_and_file(

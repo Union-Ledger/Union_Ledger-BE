@@ -436,6 +436,16 @@ def _read_rows_xls(file_bytes: bytes) -> list[list[object]]:
     return rows
 
 
+def read_excel_sheet_rows(file_bytes: bytes) -> list[list[object]]:
+    """Read the first worksheet of an xlsx/xls/xlsm workbook.
+
+    Shared by bank-statement parsing and settlement-template mapping detection.
+    """
+    if file_bytes[:8] == _OLE2_MAGIC:
+        return _read_rows_xls(file_bytes)
+    return _read_rows_xlsx(file_bytes)
+
+
 def parse_bank_statement_bytes(file_bytes: bytes) -> list[ParsedTransaction]:
     """Parse an xlsx/xls workbook into a ParsedTransaction list.
 
