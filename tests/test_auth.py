@@ -310,6 +310,26 @@ async def test_reset_password_mismatch_is_422(client: AsyncClient) -> None:
     assert resp.status_code == 422, resp.text
 
 
+async def test_reset_password_rejects_same_as_current(client: AsyncClient) -> None:
+    await signup(client, email="reset.same@konkuk.ac.kr")
+    forgot = await client.post(
+        "/api/v1/auth/password/forgot",
+        json={"email": "reset.same@konkuk.ac.kr"},
+    )
+    code = forgot.json()["debug_code"]
+    resp = await client.post(
+        "/api/v1/auth/password/reset",
+        json={
+            "email": "reset.same@konkuk.ac.kr",
+            "code": code,
+            "new_password": DEFAULT_PASSWORD,
+            "new_password_confirm": DEFAULT_PASSWORD,
+        },
+    )
+    assert resp.status_code == 400, resp.text
+    assert "기존 비밀번호" in resp.json()["detail"]
+
+
 async def test_me_reflects_memberships(client: AsyncClient) -> None:
     await signup(client, email="member@konkuk.ac.kr", name="멤버")
     headers = await auth_headers(client, "member@konkuk.ac.kr")

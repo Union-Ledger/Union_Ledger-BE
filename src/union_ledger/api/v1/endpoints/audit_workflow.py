@@ -27,7 +27,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from union_ledger.api.deps.auth import (
     get_current_user,
-    require_membership_for_org,
 )
 from union_ledger.db.session import get_db_session
 from union_ledger.models.enums import MatchStatus, RoleType, SettlementStatus
@@ -43,10 +42,12 @@ from union_ledger.schemas.bank_statement import BankTransactionResponse
 from union_ledger.schemas.evidence import EvidenceResponse
 from union_ledger.schemas.settlement import SettlementResponse
 from union_ledger.services.audit_workflow import (
+    AuditorAccessDenied,
     CommentNotEditableByUser,
     CommentNotFound,
     get_review_bundle,
     list_auditor_worklist,
+    require_auditor_for_settlement,
     update_comment,
 )
 from union_ledger.services.reconciliation import build_result_responses
@@ -62,7 +63,7 @@ DbSession = Annotated[AsyncSession, Depends(get_db_session)]
 @router.get(
     "/settlements",
     response_model=list[AuditWorklistItem],
-    summary="감사위원 워크리스트 (내가 감사 권한을 가진 조직의 결산안)",
+    summary="감사위원 워크리스트 (소속 단과대 결산안)",
 )
 async def list_worklist(
     session: DbSession,
@@ -146,12 +147,15 @@ async def get_review(
             detail=str(exc),
         ) from exc
 
-    await require_membership_for_org(
-        session,
-        user_id=current_user.id,
-        organization_id=settlement.organization_id,
-        allowed_roles={RoleType.AUDITOR},
-    )
+    try:
+        await require_auditor_for_settlement(
+            session, user_id=current_user.id, settlement=settlement
+        )
+    except AuditorAccessDenied as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
 
     bundle = await get_review_bundle(session, settlement=settlement)
     reconciliation_results = await build_result_responses(

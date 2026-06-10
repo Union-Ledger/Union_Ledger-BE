@@ -181,6 +181,12 @@ async def reset_password(
             detail="가입된 계정을 찾을 수 없습니다.",
         )
 
+    if user.password_hash and verify_password(payload.new_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="기존 비밀번호와 동일한 비밀번호는 사용할 수 없습니다.",
+        )
+
     user.password_hash = hash_password(payload.new_password)
     await session.commit()
 

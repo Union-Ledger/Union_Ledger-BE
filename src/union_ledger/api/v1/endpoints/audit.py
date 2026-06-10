@@ -40,6 +40,10 @@ from union_ledger.services.audit_comment import (
     create_comment,
     list_comments,
 )
+from union_ledger.services.audit_workflow import (
+    AuditorAccessDenied,
+    require_auditor_for_settlement,
+)
 from union_ledger.services.notification import (
     notify_audit_approved,
     notify_audit_rejected,
@@ -200,12 +204,15 @@ async def approve(
     session: DbSession,
 ) -> SettlementResponse:
     settlement = await _load_settlement_or_404(session, settlement_id)
-    membership = await require_membership_for_org(
-        session,
-        user_id=current_user.id,
-        organization_id=settlement.organization_id,
-        allowed_roles={RoleType.AUDITOR},
-    )
+    try:
+        membership = await require_auditor_for_settlement(
+            session, user_id=current_user.id, settlement=settlement
+        )
+    except AuditorAccessDenied as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
     try:
         settlement = await approve_settlement(session, settlement=settlement)
     except IllegalStatusTransition as exc:
@@ -234,12 +241,15 @@ async def reject(
     session: DbSession,
 ) -> SettlementResponse:
     settlement = await _load_settlement_or_404(session, settlement_id)
-    membership = await require_membership_for_org(
-        session,
-        user_id=current_user.id,
-        organization_id=settlement.organization_id,
-        allowed_roles={RoleType.AUDITOR},
-    )
+    try:
+        membership = await require_auditor_for_settlement(
+            session, user_id=current_user.id, settlement=settlement
+        )
+    except AuditorAccessDenied as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
     try:
         settlement = await reject_settlement(session, settlement=settlement)
     except IllegalStatusTransition as exc:

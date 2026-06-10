@@ -49,8 +49,7 @@ async def _create_settlement(
 
 
 async def test_worklist_returns_only_auditor_orgs(client: AsyncClient) -> None:
-    """A user who is auditor of org A should not see org B's submitted
-    settlement, even if both are in the system."""
+    """A college auditor sees every department in their college, not other colleges."""
     await signup(client, email="aw_a@konkuk.ac.kr")
     a_admin = await auth_headers(client, "aw_a@konkuk.ac.kr")
     org_a = await create_org_as_admin(client, a_admin)
@@ -63,21 +62,38 @@ async def test_worklist_returns_only_auditor_orgs(client: AsyncClient) -> None:
     s_a = await _create_settlement(client, a_admin, org_id=org_a["id"], title="A")
     await client.post(f"/api/v1/settlements/{s_a['id']}/submit", headers=a_admin)
 
-    # Separate org B with its own admin.
+    # Same college, different department — should be visible.
     await signup(client, email="aw_b@konkuk.ac.kr")
     b_admin = await auth_headers(client, "aw_b@konkuk.ac.kr")
     org_b = await create_org_as_admin(
-        client, b_admin, name="B팀", college_name="공과대학", department_name="기계공학부"
+        client,
+        b_admin,
+        name="B팀",
+        college_name="공과대학",
+        department_name="기계공학부",
     )
     s_b = await _create_settlement(client, b_admin, org_id=org_b["id"], title="B")
     await client.post(f"/api/v1/settlements/{s_b['id']}/submit", headers=b_admin)
+
+    # Different college — must stay hidden.
+    await signup(client, email="aw_c@konkuk.ac.kr")
+    c_admin = await auth_headers(client, "aw_c@konkuk.ac.kr")
+    org_c = await create_org_as_admin(
+        client,
+        c_admin,
+        name="C팀",
+        college_name="경영대학",
+        department_name="경영학부",
+    )
+    s_c = await _create_settlement(client, c_admin, org_id=org_c["id"], title="C")
+    await client.post(f"/api/v1/settlements/{s_c['id']}/submit", headers=c_admin)
 
     list_resp = await client.get(
         "/api/v1/audit/settlements", headers=auditor_headers
     )
     assert list_resp.status_code == 200, list_resp.text
     titles = {item["title"] for item in list_resp.json()}
-    assert titles == {"A"}
+    assert titles == {"A", "B"}
 
 
 async def test_worklist_status_filter(client: AsyncClient) -> None:
@@ -265,6 +281,55 @@ async def test_review_bundle_requires_auditor_role(client: AsyncClient) -> None:
         f"/api/v1/audit/settlements/{s['id']}", headers=treasurer
     )
     assert resp.status_code == 403, resp.text
+
+
+async def test_college_auditor_can_review_other_department_settlement(
+    client: AsyncClient,
+) -> None:
+    await signup(client, email="aw_x@konkuk.ac.kr")
+    admin = await auth_headers(client, "aw_x@konkuk.ac.kr")
+    org_a = await create_org_as_admin(
+        client,
+        admin,
+        name="컴공 학생회",
+        college_name="공과대학",
+        department_name="컴퓨터공학부",
+    )
+    auditor_headers = await add_auditor_to_org(
+        client,
+        org_id=org_a["id"],
+        admin_headers=admin,
+        auditor_email="aw_x_auditor@konkuk.ac.kr",
+    )
+
+    await signup(client, email="aw_y@konkuk.ac.kr")
+    other_admin = await auth_headers(client, "aw_y@konkuk.ac.kr")
+    org_b = await create_org_as_admin(
+        client,
+        other_admin,
+        name="기계 학생회",
+        college_name="공과대학",
+        department_name="기계공학부",
+    )
+    settlement = await _create_settlement(
+        client, other_admin, org_id=org_b["id"], title="기계 결산"
+    )
+    await client.post(
+        f"/api/v1/settlements/{settlement['id']}/submit", headers=other_admin
+    )
+
+    bundle = await client.get(
+        f"/api/v1/audit/settlements/{settlement['id']}",
+        headers=auditor_headers,
+    )
+    assert bundle.status_code == 200, bundle.text
+
+    approve = await client.post(
+        f"/api/v1/settlements/{settlement['id']}/audit/approve",
+        headers=auditor_headers,
+        json={},
+    )
+    assert approve.status_code == 200, approve.text
 
 
 async def test_review_bundle_404_for_unknown(client: AsyncClient) -> None:
