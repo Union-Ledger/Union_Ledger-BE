@@ -1,0 +1,30 @@
+{
+  "_comment": "서울석유 신용IC승인전표를 PaddleOCR 라인 단위로 옮긴 픽스처. 정답 결제액 = 합계 60,000원 (거래금액 54,546은 공급가액).",
+  "lines": [
+    { "text": "KOCES 한국신용카드결제(주)", "confidence": 0.93 },
+    { "text": "가맹점명, 가맹점 주소가", "confidence": 0.9 },
+    { "text": "실제와 다른 경우 신고안내", "confidence": 0.91 },
+    { "text": "(포상금 10만원 지급)", "confidence": 0.92 },
+    { "text": "여신금융협회 02-2011-0777", "confidence": 0.94 },
+    { "text": "신용IC승인전표", "confidence": 0.95 },
+    { "text": "[회원용]", "confidence": 0.96 },
+    { "text": "사업자No:206-19-47207 유정옥", "confidence": 0.92 },
+    { "text": "가맹점명:서울석유", "confidence": 0.95 },
+    { "text": "문의전화: 02-454-4151", "confidence": 0.95 },
+    { "text": "서울 광진구 자양동 774-15", "confidence": 0.93 },
+    { "text": "카카오체크", "confidence": 0.96 },
+    { "text": "5365-1083-****-734*", "confidence": 0.92 },
+    { "text": "전자매입", "confidence": 0.95 },
+    { "text": "거래구분: 일시불", "confidence": 0.94 },
+    { "text": "가맹번호: 00037448142", "confidence": 0.95 },
+    { "text": "거래일시: 26년 05월 15일 09:11", "confidence": 0.93 },
+    { "text": "단말번호: 4322303790 A-1125", "confidence": 0.92 },
+    { "text": "거래금액 54,546원", "confidence": 0.96 },
+    { "text": "부가세 5,454원", "confidence": 0.95 },
+    { "text": "합계 60,000원", "confidence": 0.97 },
+    { "text": "승인번호: 28002297 S", "confidence": 0.95 },
+    { "text": "매입사: KB국민", "confidence": 0.96 },
+    { "text": "서명:", "confidence": 0.9 },
+    { "text": "체크카드", "confidence": 0.96 }
+  ]
+}

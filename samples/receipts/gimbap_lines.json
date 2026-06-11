@@ -1,0 +1,29 @@
+{
+  "_comment": "서울김밥 영수증을 PaddleOCR 라인 단위로 옮긴 픽스처. 정답 결제액 = 영수금액 400,000원 (과세 363,636/세액 36,364는 부분 금액).",
+  "lines": [
+    { "text": "영 수 증", "confidence": 0.97 },
+    { "text": "서울김밥 202-06-68568", "confidence": 0.93 },
+    { "text": "백영선", "confidence": 0.95 },
+    { "text": "서울 광진구 아차산로57길 4 풍강빌딩 1층", "confidence": 0.9 },
+    { "text": "테이블명 : 메모2", "confidence": 0.93 },
+    { "text": "주문번호 : 20260421 01 01079", "confidence": 0.94 },
+    { "text": "품명 단가 수량 금액", "confidence": 0.93 },
+    { "text": "1. 참치반햄반 4,000 100 400,000", "confidence": 0.91 },
+    { "text": "주문합계 400,000", "confidence": 0.95 },
+    { "text": "할인금액 0", "confidence": 0.94 },
+    { "text": "받을금액 400,000", "confidence": 0.95 },
+    { "text": "과세 363,636", "confidence": 0.93 },
+    { "text": "세액 36,364", "confidence": 0.93 },
+    { "text": "면세 0", "confidence": 0.94 },
+    { "text": "영수금액 400,000", "confidence": 0.96 },
+    { "text": "[카카오체크 신용 승인]", "confidence": 0.92 },
+    { "text": "승인일시 2026-04-21 13:08:41", "confidence": 0.93 },
+    { "text": "카드번호 5365-1083-****-734*", "confidence": 0.91 },
+    { "text": "승인번호 23001502 할부개월 : 00", "confidence": 0.92 },
+    { "text": "승인금액 400,000", "confidence": 0.95 },
+    { "text": "가맹번호 0010951619 / KB국민카드", "confidence": 0.9 },
+    { "text": "사업자 번호 202-06-68568", "confidence": 0.93 },
+    { "text": "2026-04-21 13:08 CASHIER : 관리자", "confidence": 0.91 },
+    { "text": "감사 합니다.", "confidence": 0.95 }
+  ]
+}

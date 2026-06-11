@@ -23,17 +23,18 @@ from typing import Any
 # ── 라벨 사전 ────────────────────────────────────────────────────────────────
 # 우선순위가 높을수록 "실제 결제액"에 가깝다. 결산 대조 정답은 카드 승인액이므로
 # 결제 라벨에 가장 높은 우선순위를 둔다.
+# 실제 승인·결제·영수된 금액. 결산 대조 정답에 가장 가깝다.
+# (결제수단 표기 '체크카드/신용카드'나 행위 표기 '신용승인'은 금액 라인이
+#  아니므로 넣지 않는다 — 회사명·수단 표기 오인을 막는다.)
 PAYMENT_KEYWORDS: tuple[str, ...] = (
     "카드결제",
-    "신용승인",
     "승인금액",
     "결제금액",
+    "영수금액",
     "현금결제",
-    "체크카드",
-    "신용카드",
     "받은금액",
-    "받을금액",
 )
+# 청구·합계 금액. 결제 라벨이 없을 때 채택한다.
 TOTAL_KEYWORDS: tuple[str, ...] = (
     "합계금액",
     "합계",
@@ -41,17 +42,21 @@ TOTAL_KEYWORDS: tuple[str, ...] = (
     "총계",
     "청구금액",
     "판매합계",
-    "주문금액",
+    "주문합계",
+    "받을금액",
 )
-# 결제액 후보에서 제외해야 하는 라벨 — 부분 금액(세금·공급가·봉사료)이라
-# 절대 최종 결제액이 될 수 없다.
+# 결제액 후보에서 제외해야 하는 부분 금액(세금·공급가·봉사료·할인).
+# 카드 승인전표의 '거래금액'은 공급가액(부가세 제외분)이므로 여기 포함한다.
 SUBTOTAL_KEYWORDS: tuple[str, ...] = (
     "과세물품가액",
-    "과세 물품가액",
+    "과세",
     "공급가액",
+    "거래금액",
     "면세물품가액",
+    "면세",
     "부가세",
     "부가가치세",
+    "세액",
     "봉사료",
     "소계",
     "할인",
@@ -199,11 +204,13 @@ def _amounts_for_label(
         amounts = line.amounts
         source_index = line.index
         if not amounts:
-            for following in classified[position + 1 : position + 4]:
-                if following.amounts:
-                    amounts = following.amounts
-                    source_index = following.index
-                    break
+            # 라벨과 금액이 줄바꿈으로 분리된 경우만 보정한다. 바로 다음 줄이
+            # '라벨 없는 순수 금액 줄'일 때만 연결해, 엉뚱한 줄(예: 다른 라벨)을
+            # 끌어오지 않는다.
+            following = classified[position + 1] if position + 1 < len(classified) else None
+            if following is not None and following.label == LABEL_ITEM and following.amounts:
+                amounts = following.amounts
+                source_index = following.index
         for amount in amounts:
             candidates.append(
                 {
@@ -240,6 +247,23 @@ def parse_payment_amount(lines: Iterable[Any]) -> ParseTrace:
             continue
         stage0.append({"index": index, "text": text, "confidence": round(confidence, 4)})
         normalized_lines.append(_classify_line(index, text, confidence))
+
+    # 라벨은 매칭됐지만 연관 금액이 없는 결제/합계/세금 라인은 메타로 강등한다.
+    # 회사명('KOCES 한국신용카드결제(주)'), 결제수단 표기('체크카드'), 0원 라인
+    # ('할인금액 0')이 금액 후보에 끼어드는 것을 막는다.
+    labeled = (LABEL_PAYMENT, LABEL_TOTAL, LABEL_SUBTOTAL)
+    for position, line in enumerate(normalized_lines):
+        if line.label not in labeled or line.amounts:
+            continue
+        following = (
+            normalized_lines[position + 1] if position + 1 < len(normalized_lines) else None
+        )
+        has_following_amount = bool(
+            following is not None and following.label == LABEL_ITEM and following.amounts
+        )
+        if not has_following_amount:
+            line.label = LABEL_META
+            line.matched_keyword = None
 
     # ── Stage 1: 금액 토큰 추출 + 정규화 ──────────────────────────────────
     stage1: list[dict[str, Any]] = []
