@@ -193,31 +193,20 @@ def _amounts_for_label(
 ) -> list[dict[str, Any]]:
     """특정 라벨 라인들의 금액 후보를 평탄화한다.
 
-    라벨 라인에 금액이 같이 없으면(OCR이 금액을 다음 줄로 분리한 경우)
-    바로 뒤따르는 3개 라인 안에서 첫 금액 토큰을 연결한다.
+    라벨↔금액 병합(parse_payment_amount)이 끝난 뒤 호출되므로, 각 라벨 라인은
+    이미 자신의 금액을 들고 있다.
     """
 
     candidates: list[dict[str, Any]] = []
-    for position, line in enumerate(classified):
+    for line in classified:
         if line.label != label:
             continue
-        amounts = line.amounts
-        source_index = line.index
-        if not amounts:
-            # 라벨과 금액이 줄바꿈으로 분리된 경우만 보정한다. 바로 다음 줄이
-            # '라벨 없는 순수 금액 줄'일 때만 연결해, 엉뚱한 줄(예: 다른 라벨)을
-            # 끌어오지 않는다.
-            following = classified[position + 1] if position + 1 < len(classified) else None
-            if following is not None and following.label == LABEL_ITEM and following.amounts:
-                amounts = following.amounts
-                source_index = following.index
-        for amount in amounts:
+        for amount in line.amounts:
             candidates.append(
                 {
                     "value": amount.value,
                     "raw": amount.raw,
                     "line_index": line.index,
-                    "amount_source_line": source_index,
                     "matched_keyword": line.matched_keyword,
                 }
             )
@@ -248,24 +237,7 @@ def parse_payment_amount(lines: Iterable[Any]) -> ParseTrace:
         stage0.append({"index": index, "text": text, "confidence": round(confidence, 4)})
         normalized_lines.append(_classify_line(index, text, confidence))
 
-    # 라벨은 매칭됐지만 연관 금액이 없는 결제/합계/세금 라인은 메타로 강등한다.
-    # 회사명('KOCES 한국신용카드결제(주)'), 결제수단 표기('체크카드'), 0원 라인
-    # ('할인금액 0')이 금액 후보에 끼어드는 것을 막는다.
-    labeled = (LABEL_PAYMENT, LABEL_TOTAL, LABEL_SUBTOTAL)
-    for position, line in enumerate(normalized_lines):
-        if line.label not in labeled or line.amounts:
-            continue
-        following = (
-            normalized_lines[position + 1] if position + 1 < len(normalized_lines) else None
-        )
-        has_following_amount = bool(
-            following is not None and following.label == LABEL_ITEM and following.amounts
-        )
-        if not has_following_amount:
-            line.label = LABEL_META
-            line.matched_keyword = None
-
-    # ── Stage 1: 금액 토큰 추출 + 정규화 ──────────────────────────────────
+    # ── Stage 1: 금액 토큰 추출 + 정규화 (의미 부여 전, 발견된 모든 금액) ──
     stage1: list[dict[str, Any]] = []
     for line in normalized_lines:
         for amount in line.amounts:
@@ -276,6 +248,32 @@ def parse_payment_amount(lines: Iterable[Any]) -> ParseTrace:
                     "normalized": amount.value,
                 }
             )
+
+    # 라벨↔금액 병합 — 실제 OCR은 '합계금액'과 '854,500'을 서로 다른 줄로
+    # 분리해 내보내는 경우가 많다. 라벨 줄에 금액이 없으면 바로 뒤따르는 금액
+    # 줄(중간의 수량·노이즈 메타 줄은 건너뜀)을 흡수하고, 그 금액 줄은 소비
+    # 처리해 항목 그룹·표시에서 제외한다. 끝내 금액을 못 찾은 라벨(회사명·결제
+    # 수단 표기 등)은 메타로 강등한다.
+    labeled = (LABEL_PAYMENT, LABEL_TOTAL, LABEL_SUBTOTAL)
+    merge_window = 3
+    for position, line in enumerate(normalized_lines):
+        if line.label not in labeled or line.amounts:
+            continue
+        absorbed = None
+        for following in normalized_lines[position + 1 : position + 1 + merge_window]:
+            if following.label in labeled:
+                break  # 다음 라벨에 도달 — 이 라벨엔 연관 금액이 없는 것으로 본다
+            if following.label == LABEL_ITEM and following.amounts:
+                absorbed = following
+                break
+            # 그 외(수량 '1' 같은 메타 노이즈)는 건너뛴다
+        if absorbed is not None:
+            line.amounts = list(absorbed.amounts)
+            absorbed.label = LABEL_META  # 소비: 항목 후보·Stage 2 표시에서 제외
+            absorbed.amounts = []
+        else:
+            line.label = LABEL_META
+            line.matched_keyword = None
 
     # ── Stage 2: 라인 분류 (메타/세금/결제/합계/항목) ────────────────────
     stage2 = [line.to_dict() for line in normalized_lines]
