@@ -610,9 +610,14 @@ _GEMINI_RECEIPT_PROMPT = (
     '"date": 거래일자 "YYYY-MM-DD" 또는 null, '
     '"total_amount": 금액 숫자(통화기호·콤마 없이, 항상 양수) 또는 null, '
     '"category": 아래 목록 중 정확히 하나, '
+    '"evidence_type": 증빙 종류 하나, '
     '"is_refund": 환불/취소/반품 영수증이면 true 아니면 false}\n'
     "category는 반드시 다음 중에서만 고르세요: " + ", ".join(RECEIPT_CATEGORIES) + ". "
     "적합한 게 없으면 \"기타\". "
+    "evidence_type은 반드시 다음 중 하나로 분류하세요: "
+    "physical_receipt(종이 실물 영수증·카드전표·POS 영수증), "
+    "bank_transfer_statement(계좌이체 확인증·은행 거래명세서), "
+    "e_receipt(온라인 결제 전자영수증·이메일/앱 캡처). 애매하면 physical_receipt. "
     "부가세·소계가 아닌 최종 결제금액을 total_amount로 쓰세요. "
     "환불·취소·반품 영수증이면 is_refund=true로 하고, total_amount는 환불 금액을 "
     "양수로 적으세요(부호는 시스템이 처리)."
@@ -719,6 +724,17 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ExtractionError("Gemini JSON이 객체가 아닙니다.")
     return data
+
+
+def _coerce_evidence_type(raw: object, default: EvidenceType) -> EvidenceType:
+    """LLM이 반환한 evidence_type 문자열을 enum으로 변환. 알 수 없으면 default."""
+    if not raw:
+        return default
+    value = str(raw).strip().lower()
+    for member in EvidenceType:
+        if member.value == value:
+            return member
+    return default
 
 
 def gemini_json_to_fields(data: dict[str, Any]) -> ParsedEvidenceFields:
@@ -875,7 +891,12 @@ class EvidenceExtractionService:
             prompt=_GEMINI_RECEIPT_PROMPT,
             timeout=self._settings.gemini_timeout_seconds,
         )
-        parsed = gemini_json_to_fields(_extract_json_object(text))
+        data = _extract_json_object(text)
+        parsed = gemini_json_to_fields(data)
+        # Gemini가 판별한 증빙 종류로 덮어쓴다(자동 감지). 값이 없거나 알 수 없으면
+        # 호출자가 넘긴 기본값을 유지한다.
+        detected_type = _coerce_evidence_type(data.get("evidence_type"), evidence_type)
+        evidence_type = detected_type
         payload = {
             "engine": f"gemini:{self._settings.gemini_model}",
             "raw_text": text.strip(),

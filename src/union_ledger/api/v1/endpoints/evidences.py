@@ -336,6 +336,8 @@ async def extract_evidence(
     evidence.amount = result.amount
     evidence.payment_method = result.payment_method
     evidence.is_refund = result.is_refund
+    # LLM이 판별한 증빙 종류로 갱신(업로드 시점엔 기본값으로 저장됨).
+    evidence.evidence_type = result.evidence_type
     # Auto-fill the LLM-inferred category, but never overwrite a category the
     # treasurer already set by hand (the FE may submit one on upload).
     if result.budget_category and not evidence.budget_category:
