@@ -130,20 +130,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("samples/receipts/reports/parse_trace"),
-        help="단계별 산출물 저장 폴더",
+        default=None,
+        help="단계별 산출물 저장 폴더 (생략 시 samples/receipts/reports/<입력 파일명>)",
     )
     args = parser.parse_args(argv)
 
+    source_path = args.image if args.image is not None else args.lines
     if args.image is not None:
         lines = _load_lines_from_image(args.image)
     else:
         lines = _load_lines_from_fixture(args.lines)
 
+    # --out 미지정 시 입력 파일명 기준으로 폴더를 자동 생성한다.
+    # (그래야 여러 영수증을 연달아 돌려도 서로 덮어쓰지 않는다)
+    out_dir = args.out
+    if out_dir is None:
+        stem = source_path.stem
+        if stem.endswith("_lines"):
+            stem = stem[: -len("_lines")]
+        out_dir = Path("samples/receipts/reports") / stem
+
     trace = parse_payment_amount(lines)
     _print_trace(trace)
-    _write_artifacts(trace, args.out)
-    print(f"\n산출물 저장: {args.out.resolve()}")
+    _write_artifacts(trace, out_dir)
+    print(f"\n산출물 저장: {out_dir.resolve()}")
     return 0
 
 
