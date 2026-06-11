@@ -1,0 +1,112 @@
+<svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Malgun Gothic', sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">영수증 OCR 결제액 추출 파이프라인</title>
+  <desc id="d">PaddleOCR 라인을 5단계로 파싱해 합계 854,500원이 아닌 실제 카드 결제액 234,500원을 추출하는 과정</desc>
+
+  <style>
+    .title { font-size: 30px; font-weight: 800; fill: #1a1a1a; }
+    .sub { font-size: 16px; fill: #666; }
+    .card { fill: #f5f5f4; stroke: #e0e0dc; stroke-width: 1.5; }
+    .stage-t { font-size: 17px; font-weight: 700; fill: #1a1a1a; }
+    .stage-s { font-size: 13px; fill: #666; }
+    .data { font-size: 13px; font-family: ui-monospace, 'SF Mono', monospace; fill: #2563eb; }
+    .badge { fill: #1a1a1a; }
+    .badge-n { font-size: 15px; font-weight: 800; fill: #fff; }
+    .chev { stroke: #999; stroke-width: 2.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .panel { fill: #f5f5f4; stroke: #e0e0dc; stroke-width: 1.5; }
+    .q { font-size: 19px; font-weight: 800; fill: #1a1a1a; }
+    .rej-row { fill: #fff; stroke: #e0e0dc; stroke-width: 1; }
+    .sel-row { fill: rgba(34,160,90,0.10); stroke: #22a05a; stroke-width: 2; }
+    .rej-amt { font-size: 22px; font-weight: 700; fill: #999; font-family: ui-monospace, monospace; }
+    .rej-note { font-size: 14px; fill: #999; }
+    .sel-amt { font-size: 22px; font-weight: 800; fill: #1a7a45; font-family: ui-monospace, monospace; }
+    .sel-note { font-size: 14px; font-weight: 600; fill: #1a7a45; }
+    .big { font-size: 46px; font-weight: 800; fill: #1a7a45; font-family: ui-monospace, monospace; }
+    .big-l { font-size: 14px; font-weight: 700; fill: #1a7a45; letter-spacing: 1px; }
+    .rule { font-size: 14px; font-family: ui-monospace, monospace; font-weight: 700; fill: #666; }
+    .lg { font-size: 13px; fill: #666; }
+  </style>
+
+  <text x="50" y="52" class="title">영수증 OCR → 결제액 추출 파이프라인</text>
+  <text x="50" y="80" class="sub">구스치킨 영수증 · 라벨 분류 후 우선순위 규칙으로 실제 결제액 선택</text>
+
+  <circle cx="960" cy="46" r="6" fill="#22a05a"/>
+  <text x="972" y="51" class="lg">채택</text>
+  <line x1="1030" y1="46" x2="1052" y2="46" stroke="#999" stroke-width="2"/>
+  <line x1="1032" y1="52" x2="1050" y2="40" stroke="#999" stroke-width="1.5"/>
+  <text x="1062" y="51" class="lg">제외(부분·미결제 금액)</text>
+
+  <g>
+    <rect x="50" y="120" width="200" height="150" rx="12" class="card"/>
+    <circle cx="78" cy="148" r="15" class="badge"/>
+    <text x="78" y="153" text-anchor="middle" class="badge-n">0</text>
+    <text x="104" y="145" class="stage-t">OCR 인식</text>
+    <text x="104" y="164" class="stage-s">PaddleOCR</text>
+    <text x="70" y="205" class="data">raw 라인 27줄</text>
+    <text x="70" y="227" class="data">텍스트 + 신뢰도</text>
+    <text x="70" y="249" class="stage-s">매장·날짜·금액 혼재</text>
+  </g>
+  <g>
+    <rect x="295" y="120" width="200" height="150" rx="12" class="card"/>
+    <circle cx="323" cy="148" r="15" class="badge"/>
+    <text x="323" y="153" text-anchor="middle" class="badge-n">1</text>
+    <text x="349" y="145" class="stage-t">금액 토큰화</text>
+    <text x="349" y="164" class="stage-s">콤마 정규식</text>
+    <text x="315" y="205" class="data">234,500 → 234500</text>
+    <text x="315" y="227" class="data">13개 금액 추출</text>
+    <text x="315" y="249" class="stage-s">수량(54)은 제외</text>
+  </g>
+  <g>
+    <rect x="540" y="120" width="200" height="150" rx="12" class="card"/>
+    <circle cx="568" cy="148" r="15" class="badge"/>
+    <text x="568" y="153" text-anchor="middle" class="badge-n">2</text>
+    <text x="594" y="145" class="stage-t">라인 분류</text>
+    <text x="594" y="164" class="stage-s">라벨 5종</text>
+    <text x="560" y="205" class="data">결제·합계·세금</text>
+    <text x="560" y="227" class="data">항목·메타</text>
+    <text x="560" y="249" class="stage-s">키워드 사전 매칭</text>
+  </g>
+  <g>
+    <rect x="785" y="120" width="200" height="150" rx="12" class="card"/>
+    <circle cx="813" cy="148" r="15" class="badge"/>
+    <text x="813" y="153" text-anchor="middle" class="badge-n">3</text>
+    <text x="839" y="145" class="stage-t">후보 그룹화</text>
+    <text x="839" y="164" class="stage-s">라벨별 묶기</text>
+    <text x="805" y="205" class="data">결제: 234,500</text>
+    <text x="805" y="227" class="data">합계: 854,500</text>
+    <text x="805" y="249" class="stage-s">세금 2건 분리·제외</text>
+  </g>
+  <g>
+    <rect x="1030" y="120" width="200" height="150" rx="12" class="card"/>
+    <circle cx="1058" cy="148" r="15" class="badge"/>
+    <text x="1058" y="153" text-anchor="middle" class="badge-n">4</text>
+    <text x="1084" y="145" class="stage-t">우선순위 결정</text>
+    <text x="1084" y="164" class="stage-s">규칙 적용</text>
+    <text x="1050" y="205" class="data">결제 &gt; 합계</text>
+    <text x="1050" y="227" class="data">&gt; 항목 최댓값</text>
+    <text x="1050" y="249" class="sel-note">→ 234,500 채택</text>
+  </g>
+
+  <path d="M 266 182 l 10 13 l -10 13" class="chev"/>
+  <path d="M 511 182 l 10 13 l -10 13" class="chev"/>
+  <path d="M 756 182 l 10 13 l -10 13" class="chev"/>
+  <path d="M 1001 182 l 10 13 l -10 13" class="chev"/>
+
+  <rect x="50" y="320" width="1180" height="350" rx="16" class="panel"/>
+  <text x="80" y="372" class="q">왜 합계 854,500원이 아니라 234,500원인가?</text>
+  <text x="80" y="400" class="rule">규칙: payment &gt; total &gt; item_max</text>
+
+  <rect x="80" y="424" width="700" height="78" rx="10" class="rej-row"/>
+  <text x="104" y="458" class="rej-amt">합계금액 854,500원</text>
+  <line x1="100" y1="452" x2="356" y2="452" stroke="#999" stroke-width="2"/>
+  <text x="104" y="484" class="rej-note">분할결제·할인 전 금액일 수 있어 후순위로 제외</text>
+
+  <rect x="80" y="516" width="700" height="78" rx="10" class="sel-row"/>
+  <path d="M 104 553 l 9 9 l 17 -19" stroke="#1a7a45" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="142" y="548" class="sel-amt">카드결제 234,500원</text>
+  <text x="142" y="574" class="sel-note">실제 카드 출금액 = 통장·카드 명세 대조 정답</text>
+
+  <rect x="820" y="424" width="380" height="170" rx="12" fill="rgba(34,160,90,0.08)" stroke="#22a05a" stroke-width="2"/>
+  <text x="1010" y="478" text-anchor="middle" class="big-l">최종 추출 결제액</text>
+  <text x="1010" y="532" text-anchor="middle" class="big">234,500</text>
+  <text x="1010" y="566" text-anchor="middle" class="big-l">원</text>
+</svg>
