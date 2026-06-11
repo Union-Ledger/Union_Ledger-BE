@@ -39,8 +39,6 @@ from pathlib import Path
 
 import xlrd
 from fastapi import UploadFile
-
-from union_ledger.services.file_storage import read_upload_within_limit
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 from sqlalchemy import delete, select
@@ -53,6 +51,7 @@ from union_ledger.models.entities import (
     ReconciliationResult,
 )
 from union_ledger.models.enums import BankStatementStatus
+from union_ledger.services.file_storage import read_upload_within_limit
 
 # .xls = legacy binary (KB·신한 등 일부 은행이 여전히 .xls로 내려줌), read via xlrd.
 SUPPORTED_BANK_STATEMENT_SUFFIXES = {".xlsx", ".xlsm", ".xls"}
@@ -317,6 +316,12 @@ def _xlsx_shared_strings(zf: zipfile.ZipFile) -> list[str]:
 
 def _xlsx_cell_value(cell: ET.Element, shared_strings: Sequence[str]) -> object:
     cell_type = cell.attrib.get("t")
+    if cell_type == "inlineStr":
+        for node in cell.iter():
+            if node.tag.endswith("}t") or node.tag == "t":
+                return node.text
+        return None
+
     value_node = None
     for node in cell:
         if node.tag.endswith("}v") or node.tag == "v":
@@ -329,11 +334,6 @@ def _xlsx_cell_value(cell: ET.Element, shared_strings: Sequence[str]) -> object:
         return shared_strings[int(raw)]
     if cell_type == "d":
         return raw
-    if cell_type == "inlineStr":
-        for node in cell:
-            if node.tag.endswith("}t") or node.tag == "t":
-                return node.text
-        return None
     try:
         if "." in raw:
             return float(raw)

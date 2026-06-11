@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import io
 import uuid
+import zipfile
 from datetime import date
 from decimal import Decimal
-from pathlib import Path
+from xml.sax.saxutils import escape
 
 import pytest
 from httpx import AsyncClient
@@ -48,6 +49,85 @@ def _build_xlsx(
         ws.append(row)
     buf = io.BytesIO()
     wb.save(buf)
+    return buf.getvalue()
+
+
+def _build_strict_ooxml_xlsx(rows: list[list[object]]) -> bytes:
+    """Build a minimal strict-namespace xlsx that exercises the XML fallback."""
+    strict_ns = "http://purl.oclc.org/ooxml/spreadsheetml/main"
+
+    def col_name(index: int) -> str:
+        name = ""
+        while index >= 0:
+            index, rem = divmod(index, 26)
+            name = chr(ord("A") + rem) + name
+            index -= 1
+        return name
+
+    def cell_xml(row_idx: int, col_idx: int, value: object) -> str:
+        ref = f"{col_name(col_idx)}{row_idx}"
+        if isinstance(value, (int, float, Decimal)):
+            return f'<c r="{ref}"><v>{value}</v></c>'
+        if value is None:
+            return f'<c r="{ref}"/>'
+        return f'<c r="{ref}" t="inlineStr"><is><t>{escape(str(value))}</t></is></c>'
+
+    sheet_rows = "\n".join(
+        f'<row r="{row_idx}">'
+        + "".join(cell_xml(row_idx, col_idx, value) for col_idx, value in enumerate(row))
+        + "</row>"
+        for row_idx, row in enumerate(rows, start=1)
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels"
+    ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml"
+    ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml"
+    ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>""",
+        )
+        archive.writestr(
+            "_rels/.rels",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+    Target="xl/workbook.xml"/>
+</Relationships>""",
+        )
+        archive.writestr(
+            "xl/workbook.xml",
+            f"""<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="{strict_ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+</workbook>""",
+        )
+        archive.writestr(
+            "xl/_rels/workbook.xml.rels",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+    Target="worksheets/sheet1.xml"/>
+</Relationships>""",
+        )
+        archive.writestr(
+            "xl/worksheets/sheet1.xml",
+            f"""<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="{strict_ns}">
+  <sheetData>
+    {sheet_rows}
+  </sheetData>
+</worksheet>""",
+        )
     return buf.getvalue()
 
 
@@ -386,14 +466,18 @@ def test_coerce_date_accepts_kb_datetime_format() -> None:
     assert _coerce_date("2026-06-07 16:59:05") == date(2026, 6, 7)
 
 
-_KAKAO_FIXTURE = (
-    Path(__file__).resolve().parent / "fixtures" / "bank_statements" / "kakao_sample.xlsx"
-)
-
-
 def test_parse_kakao_bank_export_sample() -> None:
     """Kakao Bank email xlsx uses strict OOXML + 구분/거래금액 columns."""
-    file_bytes = _KAKAO_FIXTURE.read_bytes()
+    file_bytes = _build_strict_ooxml_xlsx(
+        [
+            ["거래일시", "구분", "거래금액", "잔액", "거래명", "메모"],
+            ["2026-06-08T19:30:14", "출금", 15000, 985000, "카카오페이", ""],
+            ["2026-06-08T20:10:02", "출금", 50000, 935000, "넥슨캐시", ""],
+            ["2026-06-09T09:00:00", "입금", 300000, 1235000, "김철수", "모임회비"],
+            ["2026-06-09T12:15:44", "출금", 8500, 1226500, "스타벅스", ""],
+            ["2026-06-10T08:00:00", "입금", 1000000, 2226500, "(주)회사명", "급여"],
+        ]
+    )
     transactions = parse_bank_statement_bytes(file_bytes)
 
     assert len(transactions) == 5
