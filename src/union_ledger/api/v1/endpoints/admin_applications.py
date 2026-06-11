@@ -12,7 +12,9 @@ Flow:
 
 from __future__ import annotations
 
+import math
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -47,6 +49,9 @@ from union_ledger.services.file_storage import LocalFileStorage
 
 router = APIRouter(tags=["admin-applications"])
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
+
+# 반려 후 재신청 대기 기간 — 무분별한 반복 신청을 막는 가드
+REAPPLY_COOLDOWN_DAYS = 7
 
 
 def _is_operator(user: AuthUser) -> bool:
@@ -129,6 +134,42 @@ async def submit_application(
     department_name: Annotated[str, Form()],
     documents: Annotated[list[UploadFile], File()],
 ) -> AdminApplicationResponse:
+    # 도배 방지: 대기 중 신청이 있으면 거부, 반려 직후에는 쿨다운 적용.
+    # 파일을 저장하기 전에 검사해 불필요한 업로드 잔여물을 남기지 않는다.
+    existing = await list_applications_for_user(
+        session, applicant_id=current_user.id
+    )
+    if any(a.status == AdminApplicationStatus.PENDING for a in existing):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 심사 대기 중인 회장 신청이 있습니다. 운영자 검토가 끝난 뒤 다시 신청해 주세요.",
+        )
+
+    latest_rejected = next(
+        (
+            a
+            for a in existing
+            if a.status == AdminApplicationStatus.REJECTED and a.reviewed_at
+        ),
+        None,
+    )
+    if latest_rejected is not None:
+        cooldown_until = latest_rejected.reviewed_at + timedelta(
+            days=REAPPLY_COOLDOWN_DAYS
+        )
+        now = datetime.now(UTC)
+        if now < cooldown_until:
+            remaining_days = max(
+                1, math.ceil((cooldown_until - now).total_seconds() / 86400)
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"반려된 신청이 있어 {REAPPLY_COOLDOWN_DAYS}일이 지난 뒤 "
+                    f"다시 신청할 수 있습니다. (약 {remaining_days}일 남음)"
+                ),
+            )
+
     real_files = [f for f in documents if f.filename]
     if not real_files:
         raise HTTPException(
