@@ -1,0 +1,32 @@
+{
+  "_comment": "구스치킨 영수증을 PaddleOCR 라인 단위로 옮긴 픽스처. 실제 추출은 --image 로 PaddleOCR을 돌려 동일 라인을 생성한다.",
+  "lines": [
+    { "text": "[영 수 증]", "confidence": 0.985 },
+    { "text": "매장명 : 구스치킨", "confidence": 0.972 },
+    { "text": "대표자 : 제갈동선", "confidence": 0.961 },
+    { "text": "주 소 : 서울 광진구 능동로 19길 35 지하1층 103", "confidence": 0.939 },
+    { "text": "호 화양동", "confidence": 0.948 },
+    { "text": "전 화 : 0211111111", "confidence": 0.967 },
+    { "text": "사업자 : 889-20-01720", "confidence": 0.958 },
+    { "text": "판매일자 : 2026-05-15 (금)", "confidence": 0.971 },
+    { "text": "테이블NO : [ T ] - 10", "confidence": 0.944 },
+    { "text": "[품명] [수량] [금액]", "confidence": 0.951 },
+    { "text": "갈릭간장순살치킨 12 204,000", "confidence": 0.933 },
+    { "text": "세트B(후라이드순살+떡볶이) 12 288,000", "confidence": 0.918 },
+    { "text": "소주 54 243,000", "confidence": 0.969 },
+    { "text": "스프라이트 18 36,000", "confidence": 0.962 },
+    { "text": "코카콜라 8 16,000", "confidence": 0.965 },
+    { "text": "맥주 9 45,000", "confidence": 0.97 },
+    { "text": "펩시제로 6 12,000", "confidence": 0.958 },
+    { "text": "양은밥 2 6,000", "confidence": 0.96 },
+    { "text": "생맥주(500cc) 1 4,500", "confidence": 0.947 },
+    { "text": "합계금액 854,500", "confidence": 0.974 },
+    { "text": "과세 물품가액 : 776,824", "confidence": 0.951 },
+    { "text": "부가세 : 77,676", "confidence": 0.956 },
+    { "text": "카드결제 234,500원", "confidence": 0.968 },
+    { "text": "[카드 번호] 5365-10**-****-****", "confidence": 0.929 },
+    { "text": "[승인 번호] 26002377", "confidence": 0.963 },
+    { "text": "[승인 일시] 2026-05-15 21:58", "confidence": 0.957 },
+    { "text": "[매입 사명] KB국민카드", "confidence": 0.961 }
+  ]
+}

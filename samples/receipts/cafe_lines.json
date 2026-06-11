@@ -1,0 +1,11 @@
+{
+  "_comment": "카드결제 라벨이 없는 단순 영수증 — 폴백 동작(합계 채택) 검증용.",
+  "lines": [
+    { "text": "스타벅스 건대입구역점", "confidence": 0.97 },
+    { "text": "아메리카노 2 9,000", "confidence": 0.95 },
+    { "text": "카페라떼 1 5,500", "confidence": 0.96 },
+    { "text": "공급가액 13,182", "confidence": 0.94 },
+    { "text": "부가세 1,318", "confidence": 0.95 },
+    { "text": "합계금액 14,500", "confidence": 0.97 }
+  ]
+}
