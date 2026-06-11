@@ -9,6 +9,7 @@ from union_ledger.models.enums import RoleType
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str | None = None
     token_type: str = "bearer"
 
 
